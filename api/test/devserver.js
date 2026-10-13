@@ -20,6 +20,34 @@ setQueryImpl(db.query);
 await repo.ensureSchema(await fs.readFile(new URL('../src/schema.sql', import.meta.url), 'utf8'));
 await importExport(JSON.parse(await fs.readFile(new URL('../seed/export.json', import.meta.url), 'utf8')));
 
+let devSeq = 0;
+const TOPIC = ['remote work', 'online courses', 'city parks', 'sleep habits', 'electric cars', 'museum visits', 'part-time jobs', 'social media'];
+const devSentence = (level, i) => {
+  const topic = TOPIC[i % TOPIC.length];
+  return {
+    level,
+    focus: level === 'CET-6' ? '让步从句 + 定语从句' : '让步状语从句',
+    segs: [
+      { r: 'adv', t: `Although ${topic} ^offers^ obvious benefits,`, n: '让步状语从句，译成“尽管……”。', k: 'adv_concession' },
+      { r: 'main', t: 'many students *still worry about*', n: '主句主语和谓语。', k: 'main' },
+      { r: 'main', t: 'the hidden costs', n: '宾语。', k: 'main' },
+      { r: 'attr', t: `that ^are^ rarely discussed in public debates about ${topic} (${i}).`, n: '定语从句，修饰 costs。', k: 'attr_r' },
+    ],
+    trunk: 'Many students still worry about the hidden costs.',
+    trunkZh: '许多学生仍然担心隐性成本。',
+    trap: '',
+    tip: '让步从句放在句首，译成“尽管……，但……”。',
+    ref: `尽管${topic}好处明显，但许多学生仍然担心那些在公开讨论中很少被提及的隐性成本。`,
+    opts: [
+      { t: `尽管${topic}好处明显，但许多学生仍然担心那些在公开讨论中很少被提及的隐性成本。`, ok: true, why: '结构清楚，表达自然。' },
+      { t: '虽然它提供明显的好处，许多学生仍然担心隐藏的成本那些很少被讨论。', ok: false, why: '逐词硬译，语序别扭。' },
+      { t: '它的好处很明显，所以学生不担心成本。', ok: false, why: '理解反了让步关系。' },
+    ],
+    words: [{ w: 'hidden', lemma: 'hidden', pos: 'adj.', zh: '隐藏的' }],
+    phrases: [{ m: 'worry about', p: 'worry about', zh: '担心' }],
+  };
+};
+
 const fake = await startFakeLlm({
   grade: (prompt) => {
     const text = /<student_translation>\n([\s\S]*?)\n<\/student_translation>/.exec(prompt)?.[1] || '';
@@ -33,7 +61,11 @@ const fake = await startFakeLlm({
     };
   },
   lookup: () => ({ lemma: 'example', ipa: '/ɪɡˈzæmpəl/', pos: 'n.', zh: '例子（假模型）', more: '榜样；样本' }),
-  generate: () => ({ sentences: [] }),
+  // 按提示词里“按顺序出：第 1 句 CET-6，…”的难度出几句能通过校验的句子
+  generate: (prompt) => {
+    const order = /按顺序出：(.*?)。/.exec(prompt)?.[1].match(/CET-[46]/g) || ['CET-4'];
+    return { sentences: order.map((level) => devSentence(level, ++devSeq)) };
+  },
 });
 
 // DEV_NO_LLM=1：模拟还没配置模型，在网页“设置”里填写（接口地址见下面打印的 fake llm）

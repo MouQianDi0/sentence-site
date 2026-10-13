@@ -1,6 +1,6 @@
 # 长难句拆解台（自用版）
 
-四六级长难句练习网站：圈谓语 → 看结构（成分颜色 + 从句知识点）→ 翻译（AI 批改 + 选译文），带点词查义、朗读、学习记录和每日自动出题。
+四六级长难句练习网站：圈谓语 → 看结构（成分颜色 + 从句知识点）→ 翻译（AI 批改 + 选译文），带点词查义、朗读、学习记录和每日任务。
 
 - 前端：原生 JS 模块 + Tailwind CSS v4（已编译好 `web/css/app.css`）+ GSAP 动画，不需要构建
 - 后端：Node.js 22，唯一依赖是 `pg`；AI 走任何兼容 OpenAI 接口格式的国内大模型
@@ -64,6 +64,15 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 | 导入旧页面导出的数据 | `sudo docker compose exec -T api node scripts/import.js < 导出文件.json` |
 | 停止网站 | `sudo docker compose down`（数据保留在 `data/postgres`） |
 
+## 每日任务
+
+练习页最上面是“今日任务”：每天北京时间 7:50 自动生成（也可以点“现在生成”），进度条显示完成了几句。一句在第 3 步选对译文就算完成；全部完成后练习页显示完成页，可以复习今天的句子，也可以选 1–10 句加练（加练的句子算进今天的任务）。
+
+在“设置”页的“每日任务”里改：
+
+- 难度：四级、六级可以多选。两个都选时各占一半，顺序随机。
+- 每天几句：1–10 句。今天的任务已经生成后调多了，练习页会出现“补齐”按钮。
+
 ## 配置国内大模型
 
 打开网站，点右上角的“设置”：
@@ -88,7 +97,8 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 | POST | /api/unlock | 输入访问密码，换 30 天有效的 Cookie（连续错 5 次锁 15 分钟） |
 | GET | /api/session | 是否已解锁 |
 | GET | /api/sentences?since= | 句库（带 since 只返回更新的） |
-| POST | /api/sentences/generate | AI 生成 5 句 |
+| POST | /api/sentences/generate | `{"kind":"daily"}` 生成或补齐今日任务；`{"kind":"extra","count":3}` 加练 1–10 句 |
+| GET / PUT | /api/settings/practice | 每日任务设置：`levels`（CET-4 / CET-6，可多选）、`dailyCount`（1–10） |
 | DELETE | /api/sentences/:id | 删除一句（连带它的记录） |
 | GET | /api/records | 所有句子的练习状态 |
 | PUT | /api/records/:sentenceId | 保存圈谓语结果、选项、草稿（只改传入的字段） |

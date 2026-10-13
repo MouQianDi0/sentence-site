@@ -7,6 +7,7 @@ import { checkRecordPatch } from './validate.js';
 import { createAi, toHttpError } from './ai.js';
 import { createLlm, LlmError } from './llm.js';
 import { createSettings } from './settings.js';
+import { createPractice, MAX_DAILY } from './practice.js';
 import { shanghaiDate } from './time.js';
 
 /** 连接测试没拿到 JSON 时，告诉用户该怎么改 */
@@ -23,14 +24,18 @@ function testHint(why, c) {
     : '连上了，但模型没有按 JSON 格式回复。可以试试打开“JSON 输出模式”，或者换一个模型';
 }
 
-export function createApp(cfg, { llm = createLlm(cfg), settings = null, log = console } = {}) {
+export function createApp(cfg, { llm = createLlm(cfg), settings = null, practice = null, ai: aiIn = null, log = console } = {}) {
   const auth = createAuth(cfg);
-  const ai = createAi({ cfg, llm, log });
+  const ai = aiIn || createAi({ cfg, llm, log });
   const router = createRouter();
   const pub = { public: true };
   // 没有从外面传入时自己读取一次数据库里的模型配置
   const settingsSvc = settings || createSettings(cfg);
-  const settingsReady = settings ? Promise.resolve() : settingsSvc.load().catch((e) => log.error('[settings]', e.message));
+  const practiceSvc = practice || createPractice(cfg);
+  const settingsReady = Promise.all([
+    settings ? null : settingsSvc.load().catch((e) => log.error('[settings]', e.message)),
+    practice ? null : practiceSvc.load().catch((e) => log.error('[practice]', e.message)),
+  ]);
 
   // ---- 不需要密码 -------------------------------------------------------------
   router.add('GET', '/api/health', async () => {
@@ -72,9 +77,18 @@ export function createApp(cfg, { llm = createLlm(cfg), settings = null, log = co
     return { body: { ok: true } };
   });
 
-  router.add('POST', '/api/sentences/generate', async () => {
-    const ids = await ai.generate({ source: 'manual', n: 5 });
-    return { body: { added: ids } };
+  // kind=daily：生成（或补齐）今日任务；kind=extra（默认）：加练 count 句（1–10）。难度按“每日任务”设置
+  router.add('POST', '/api/sentences/generate', async ({ req }) => {
+    const body = await readJson(req);
+    const p = practiceSvc.get();
+    if (body.kind === 'daily') {
+      const n = p.dailyCount - (await repo.countDailyFor(shanghaiDate()));
+      if (n <= 0) throw new HttpError(409, '今天的任务已经生成好了');
+      return { body: { added: await ai.generate({ source: 'daily', n, levels: p.levels }) } };
+    }
+    const n = body.count === undefined ? 5 : Number(body.count);
+    if (!Number.isInteger(n) || n < 1 || n > MAX_DAILY) throw new HttpError(400, `一次加练 1–${MAX_DAILY} 句`);
+    return { body: { added: await ai.generate({ source: 'extra', n, levels: p.levels }) } };
   });
 
   // ---- 练习记录 ---------------------------------------------------------------
@@ -117,6 +131,10 @@ export function createApp(cfg, { llm = createLlm(cfg), settings = null, log = co
       },
     };
   });
+
+  // ---- 每日任务设置 -----------------------------------------------------------
+  router.add('GET', '/api/settings/practice', async () => ({ body: practiceSvc.get() }));
+  router.add('PUT', '/api/settings/practice', async ({ req }) => ({ body: await practiceSvc.save(await readJson(req)) }));
 
   // ---- 模型设置 ---------------------------------------------------------------
   router.add('GET', '/api/settings/llm', async () => ({ body: settingsSvc.view() }));

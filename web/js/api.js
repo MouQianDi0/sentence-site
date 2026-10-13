@@ -33,7 +33,10 @@ export const api = {
   unlock: (password) => request('POST', '/api/unlock', { password }),
   sentences: (since) => request('GET', `/api/sentences${since ? `?since=${encodeURIComponent(since)}` : ''}`),
   deleteSentence: (id) => request('DELETE', `/api/sentences/${encodeURIComponent(id)}`),
-  generate: () => request('POST', '/api/sentences/generate'),
+  // { kind: 'daily' } 生成或补齐今日任务；{ kind: 'extra', count } 加练
+  generate: (body = {}) => request('POST', '/api/sentences/generate', body),
+  practiceSettings: () => request('GET', '/api/settings/practice'),
+  savePracticeSettings: (body) => request('PUT', '/api/settings/practice', body),
   records: () => request('GET', '/api/records'),
   saveRecord: (id, patch) => request('PUT', `/api/records/${encodeURIComponent(id)}`, patch),
   attempts: () => request('GET', '/api/attempts'),

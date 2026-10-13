@@ -11,7 +11,7 @@ import * as repo from '../src/repo.js';
 import { importExport } from '../src/importer.js';
 import { createTestDb, startFakeLlm, startApp } from './helpers.js';
 
-const quiet = { log() {}, error() {}, warn() {} };
+const quiet = { log() {}, error: (...a) => process.env.DEBUG_TEST && console.error(...a), warn() {} };
 let db, llmServer, app, cfg, ai;
 
 const sentenceFor = (i, extra = {}) => ({
@@ -49,7 +49,7 @@ before(async () => {
   llmServer = await startFakeLlm({
     grade: () => gradeReplyGetter(),
     lookup: () => ({ lemma: 'publish', ipa: '/ˈpʌblɪʃ/', pos: 'v.', zh: '发表', more: '出版；公布' }),
-    generate: () => generateReplyGetter(),
+    generate: (prompt) => generateReplyGetter(prompt),
   });
   cfg = loadConfig({
     ACCESS_PASSWORD: 'open-sesame-42',
@@ -238,6 +238,8 @@ test('出题：不合格的句子被丢掉，不足时补一轮，新句子出�
     }
     return { sentences: [sentenceFor(4), sentenceFor(5), sentenceFor(6), sentenceFor(7)] };
   };
+  // 测试用的句子都是四级
+  assert.equal((await app.api('PUT', '/api/settings/practice', { levels: ['CET-4'] })).status, 200);
   const r = await app.api('POST', '/api/sentences/generate');
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.added.length, 5);
@@ -245,12 +247,12 @@ test('出题：不合格的句子被丢掉，不足时补一轮，新句子出�
   assert.match(r.body.added[0], /^s-\d{8}-\d{6}-1$/);
   const all = (await app.api('GET', '/api/sentences')).body.sentences;
   assert.equal(all.length, 11);
-  assert.equal(all.at(-1).source, 'manual');
+  assert.equal(all.at(-1).source, 'extra');
 });
 
 test('每日出题：今天已经出过就不再出', async () => {
   generateReplyGetter = () => ({ sentences: [sentenceFor(11), sentenceFor(12), sentenceFor(13), sentenceFor(14), sentenceFor(15)] });
-  const ids = await ai.generate({ source: 'daily', n: 5 });
+  const ids = await ai.generate({ source: 'daily', n: 5, levels: ['CET-4'] });
   assert.equal(ids.length, 5);
   assert.match(ids[0], /^s-\d{8}-d1$/);
   const today = (await app.api('GET', '/api/sentences')).body.sentences.at(-1).batch;
@@ -283,4 +285,101 @@ test('密码连续输错 5 次后锁定', async () => {
   const right = await other.api('POST', '/api/unlock', { password: 'open-sesame-42' });
   assert.equal(right.status, 429, '锁定期间输对也不行');
   other.close();
+});
+
+// ---- 每日任务：难度、句数、加练 ---------------------------------------------------
+import { planLevels, createPractice } from '../src/practice.js';
+
+/** 假模型：按提示词里“按顺序出：第 1 句 CET-6，…”的难度出题 */
+let seq = 100;
+const followPlan = (prompt) => {
+  const order = /按顺序出：(.*?)。/.exec(prompt)[1].match(/CET-[46]/g);
+  return { sentences: order.map((level) => sentenceFor(seq++, { level })) };
+};
+
+test('难度分配：只选一种全是它，两种都选各占一半', () => {
+  assert.deepEqual(planLevels(3, ['CET-6']), ['CET-6', 'CET-6', 'CET-6']);
+  for (const n of [1, 4, 5, 10]) {
+    const plan = planLevels(n, ['CET-4', 'CET-6']);
+    const four = plan.filter((l) => l === 'CET-4').length;
+    assert.equal(plan.length, n);
+    assert.ok(Math.abs(four - (n - four)) <= 1, `n=${n} 四级 ${four} 句`);
+  }
+});
+
+test('每日任务设置：默认值、校验、保存后重启还在', async () => {
+  let r = await app.api('GET', '/api/settings/practice');
+  assert.deepEqual(r.body, { levels: ['CET-4'], dailyCount: 5, maxDaily: 10, dailyAt: '7:50', autoDaily: true });
+  for (const bad of [{ dailyCount: 11 }, { dailyCount: 0 }, { dailyCount: 2.5 }, { levels: [] }, { levels: ['CET-8'] }]) {
+    assert.equal((await app.api('PUT', '/api/settings/practice', bad)).status, 400, JSON.stringify(bad));
+  }
+  r = await app.api('PUT', '/api/settings/practice', { levels: ['CET-6', 'CET-4'], dailyCount: 7 });
+  assert.deepEqual(r.body, { levels: ['CET-4', 'CET-6'], dailyCount: 7, maxDaily: 10, dailyAt: '7:50', autoDaily: true });
+  const p2 = createPractice(cfg);
+  await p2.load();
+  assert.equal(p2.get().dailyCount, 7);
+});
+
+test('加练：四六级混合，超过 5 句分两次请求，句子打乱顺序', async () => {
+  generateReplyGetter = followPlan;
+  const before = llmServer.calls.length;
+  const gensBefore = (await app.api('GET', '/api/usage')).body.gens;
+  const r = await app.api('POST', '/api/sentences/generate', { kind: 'extra', count: 7 });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.added.length, 7);
+  const prompts = llmServer.calls.slice(before).map((c) => c.prompt);
+  assert.equal(prompts.length, 2);
+  assert.match(prompts[0], /按顺序出：第 1 句 CET-[46](，第 \d 句 CET-[46]){4}。/);
+  const all = (await app.api('GET', '/api/sentences')).body.sentences;
+  const added = all.filter((s) => r.body.added.includes(s.id));
+  const four = added.filter((s) => s.level === 'CET-4').length;
+  assert.ok(four === 3 || four === 4, `四级 ${four} 句`);
+  assert.ok(added.every((s) => s.source === 'extra'));
+  assert.equal((await app.api('GET', '/api/usage')).body.gens, gensBefore + 1, '加练算一次出题');
+  assert.equal((await app.api('POST', '/api/sentences/generate', { count: 11 })).status, 400);
+});
+
+test('难度不对的句子会被丢掉并补出', async () => {
+  await app.api('PUT', '/api/settings/practice', { levels: ['CET-6'] });
+  let round = 0;
+  generateReplyGetter = (prompt) => {
+    round += 1;
+    // 第一次全写成四级（不要的），第二次按要求
+    return round === 1 ? { sentences: [sentenceFor(seq++), sentenceFor(seq++)] } : followPlan(prompt);
+  };
+  const r = await app.api('POST', '/api/sentences/generate', { count: 2 });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(round, 2);
+  const all = (await app.api('GET', '/api/sentences')).body.sentences;
+  assert.ok(all.filter((s) => r.body.added.includes(s.id)).every((s) => s.level === 'CET-6'));
+});
+
+test('今日任务：已经生成够了返回 409；调大每天句数后可以补齐，编号接着排', async () => {
+  generateReplyGetter = followPlan;
+  await app.api('PUT', '/api/settings/practice', { levels: ['CET-4', 'CET-6'], dailyCount: 5 });
+  const gensBefore = (await app.api('GET', '/api/usage')).body.gens;
+  assert.equal((await app.api('POST', '/api/sentences/generate', { kind: 'daily' })).status, 409);
+  await app.api('PUT', '/api/settings/practice', { dailyCount: 7 });
+  const r = await app.api('POST', '/api/sentences/generate', { kind: 'daily' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.deepEqual(r.body.added.map((id) => id.replace(/^s-\d{8}-/, '')).sort(), ['d6', 'd7']);
+  assert.equal((await app.api('GET', '/api/usage')).body.gens, gensBefore, '今日任务不算加练次数');
+  assert.equal((await app.api('POST', '/api/sentences/generate', { kind: 'daily' })).status, 409);
+});
+
+test('编号被占用时顺延：删掉一句今日任务后补齐，同一秒内加练两次', async () => {
+  generateReplyGetter = followPlan;
+  const day = (await app.api('GET', '/api/usage')).body.day.replace(/-/g, '');
+  assert.equal((await app.api('DELETE', `/api/sentences/s-${day}-d2`)).status, 200);
+  const r = await app.api('POST', '/api/sentences/generate', { kind: 'daily' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.added.length, 1);
+  assert.match(r.body.added[0], /-d8$/, 'd1–d7 里 d2 删了、d7 还在，新句子不能撞到已有编号');
+  const [a, b] = await Promise.all([
+    app.api('POST', '/api/sentences/generate', { count: 2 }),
+    app.api('POST', '/api/sentences/generate', { count: 2 }),
+  ]);
+  assert.equal(a.status, 200);
+  assert.equal(b.status, 200);
+  assert.equal(new Set([...a.body.added, ...b.body.added]).size, 4);
 });

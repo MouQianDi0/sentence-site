@@ -1,10 +1,11 @@
 // 长难句拆解台 · 页面逻辑
 import { api, setUnauthorizedHandler } from './api.js';
 import { ROLES, ROLE_CLS, KB, DEFK } from './kb.js';
-import { esc, toks, plain, flat, phraseMap, diff, localDate, fmtDay, fmtTime, scoreTone, shuffle } from './text.js';
+import { esc, toks, plain, flat, phraseMap, diff, fmtDay, fmtTime, scoreTone, shuffle } from './text.js';
 import * as speech from './speech.js';
 import * as A from './anim.js';
 import { createSettingsView } from './settings.js';
+import { createTaskSettings, levelText } from './practice.js';
 
 const $ = (id) => document.getElementById(id);
 const ls = {
@@ -75,7 +76,14 @@ let quizOpen = false;
 let grading = false;
 let gradeErr = '';
 let freshFb = false;
-let generating = false;
+let practiceCfg = { levels: ['CET-4', 'CET-6'], dailyCount: 5, maxDaily: 10, dailyAt: '7:50', autoDaily: true };
+let showDone = false; // 今日任务全部完成时，练习页显示完成页（点开某一句复习时关掉）
+let taskBusy = ''; // daily | extra：正在生成
+let taskBusyN = 0;
+let taskErr = '';
+let extraOpen = false; // 任务卡片里的“加练”展开
+let extraCount = 3;
+let celebrate = false; // 刚完成最后一句，完成页要放庆祝动画
 let deleteArmed = null;
 let speaking = false;
 let lookupBusy = null;
@@ -88,8 +96,15 @@ const lastAttempt = (id) => atts(id)[0] || null;
 
 // ---------- 数据 ----------
 async function loadAll() {
-  const [s, r, a, u] = await Promise.all([api.sentences(), api.records(), api.attempts(), api.usage().catch(() => null)]);
+  const [s, r, a, u, p] = await Promise.all([
+    api.sentences(),
+    api.records(),
+    api.attempts(),
+    api.usage().catch(() => null),
+    api.practiceSettings().catch(() => null),
+  ]);
   sentences = s.sentences;
+  if (p) practiceCfg = p;
   records = {};
   r.records.forEach((x) => (records[x.sentenceId] = x));
   attempts = {};
@@ -104,8 +119,8 @@ async function loadAll() {
   if (fresh.length) toast(`自上次练习以来新增 ${fresh.length} 句`, { label: '去练习', fn: () => open(fresh[0].id) });
 }
 
-async function checkNewSentences() {
-  if (!loaded || document.hidden) return;
+async function checkNewSentences(quiet = false) {
+  if (!loaded || (document.hidden && !quiet)) return;
   const last = sentences.at(-1)?.created;
   try {
     const r = await api.sentences(last);
@@ -114,7 +129,13 @@ async function checkNewSentences() {
     if (!added.length) return;
     sentences = sentences.concat(added);
     renderBank();
+    renderTask();
     if (cur) $('label').textContent = `句子 ${sentences.indexOf(cur) + 1} / ${sentences.length}`;
+    if (quiet) return added;
+    if (showDone && view === 'practice') {
+      open(added[0].id); // 完成页上收到新句子（比如别的设备加练了），直接开始练
+      return added;
+    }
     toast(`句库更新：新增 ${added.length} 句`, { label: '去练习', fn: () => open(added[0].id) });
     return added;
   } catch {}
@@ -124,6 +145,7 @@ function saveRecord(id, patch) {
   records[id] = { ...(records[id] || { sentenceId: id, done: false }), ...patch, updatedAt: new Date().toISOString() };
   api.saveRecord(id, patch).catch((e) => toast(`保存失败：${e.message}`));
   renderBank();
+  renderTask();
 }
 
 let draftTimer = null;
@@ -140,10 +162,10 @@ function renderBank() {
   const done = sentences.filter((s) => rec(s.id)?.done).length;
   $('bankCount').textContent = total ? `共 ${total} 句 · 已完成 ${done}` : '';
   if (!total) {
-    el.innerHTML = `<p class="m-0 text-[14px] text-muted">${loaded ? '句库还是空的，点“生成 5 句新句子”开始。' : '正在加载句库…'}</p>`;
+    el.innerHTML = `<p class="m-0 text-[14px] text-muted">${loaded ? '句库还是空的，生成今天的任务就有句子了。' : '正在加载句库…'}</p>`;
     return;
   }
-  const today = localDate(new Date());
+  const td = today();
   const groups = [];
   let g = null;
   sentences.forEach((s, i) => {
@@ -153,7 +175,7 @@ function renderBank() {
   const newCut = Date.now() - 3 * 864e5;
   el.innerHTML = groups
     .map((gr) => `<div class="flex flex-none flex-col gap-1.5">
-      <span class="whitespace-nowrap font-mono text-[11px] tracking-[.04em] text-muted">${gr.b === today ? '<b class="font-medium text-accent">今天</b> ' : ''}${esc(fmtDay(gr.b))}</span>
+      <span class="whitespace-nowrap font-mono text-[11px] tracking-[.04em] text-muted">${gr.b === td ? '<b class="font-medium text-accent">今天</b> ' : ''}${esc(fmtDay(gr.b))}</span>
       <div class="flex gap-1.5">${gr.items.map(({ s, i }) => dotHTML(s, i, newCut)).join('')}</div></div>`)
     .join('');
   const d = el.querySelector('[data-cur]');
@@ -532,7 +554,8 @@ function quizHTML() {
   const answered = answer >= 0;
   const isLast = sentences.indexOf(cur) === sentences.length - 1;
   if (optOrder.length !== cur.opts.length) optOrder = shuffle(cur.opts.length);
-  const allDone = sentences.length && sentences.every((x) => rec(x.id)?.done);
+  const t = taskInfo();
+  const taskDone = t.complete && t.list.some((x) => x.id === cur.id);
   return `<div class="flex flex-col gap-2">${optOrder
     .map((oi, k) => {
       const o = cur.opts[oi];
@@ -548,8 +571,7 @@ function quizHTML() {
     })
     .join('')}</div>
     ${answered ? `<div class="border-l-[3px] border-accent py-1 pl-3 text-[14.5px]"><b class="block font-mono text-[11px] font-medium tracking-[.1em] text-accent">翻译技巧</b>${esc(cur.tip)}</div>
-      <div class="${C.row}">${isLast ? '' : `<button class="${C.btnPrimary}" data-act="next">下一句 →</button>`}<button class="${C.btn}" data-act="retry">重选</button></div>
-      ${allDone ? '<p class="m-0 text-center text-[14px] text-muted">句库里的句子全部完成了。明天早上会有 5 句新句子，或者现在点上方“生成 5 句新句子”。</p>' : ''}` : ''}`;
+      <div class="${C.row}">${taskDone ? `<button class="${C.btnPrimary}" data-act="showDone">今日任务完成，去看看 →</button>` : isLast ? '' : `<button class="${C.btnPrimary}" data-act="next">下一句 →</button>`}<button class="${C.btn}" data-act="retry">重选</button></div>` : ''}`;
 }
 
 function step3HTML() {
@@ -594,6 +616,8 @@ function renderPanel(enter) {
 
 function renderAll(enter) {
   renderBank();
+  renderTask();
+  renderDone(enter);
   renderTabs();
   renderSentence();
   renderPanel(enter);
@@ -613,17 +637,20 @@ function renderViews() {
   if (view === 'records') renderRecords();
   if (view === 'settings' && !settingsOpened) {
     settingsOpened = true;
+    taskSettings.open();
     settingsView.open();
   }
 }
 
 function showView(name) {
+  if (name === 'practice' && view !== 'practice' && taskInfo().complete) showDone = true;
   view = name;
   ui.view = view;
   saveUI();
   if (speaking) stopSpeak();
   if (name === 'settings') settingsOpened = false; // 每次进入都重新读取
   renderViews();
+  if (name === 'practice') renderDone(false);
   if (name !== 'settings') A.enter($(VIEWS[name]).children);
   window.scrollTo({ top: 0 });
 }
@@ -696,6 +723,7 @@ function open(id, { keepView = false } = {}) {
   cur = s;
   ui.cur = s.id;
   saveUI();
+  showDone = false;
   step = 1;
   picked = new Set();
   checked = false;
@@ -739,9 +767,15 @@ function pickInitial() {
     renderAll(false);
     return;
   }
-  if (ui.cur && sentences.some((s) => s.id === ui.cur)) return open(ui.cur, { keepView: true });
-  const nd = sentences.find((s) => !rec(s.id)?.done);
-  open((nd || sentences.at(-1)).id, { keepView: true });
+  const t = taskInfo();
+  const todo = t.list.find((s) => !rec(s.id)?.done);
+  if (todo && !(ui.cur && t.list.some((s) => s.id === ui.cur) && !rec(ui.cur)?.done)) open(todo.id, { keepView: true });
+  else if (ui.cur && sentences.some((s) => s.id === ui.cur)) open(ui.cur, { keepView: true });
+  else open((sentences.find((s) => !rec(s.id)?.done) || sentences.at(-1)).id, { keepView: true });
+  if (t.complete) {
+    showDone = true;
+    renderDone(false);
+  }
 }
 
 // ---------- 删除 ----------
@@ -813,27 +847,238 @@ async function grade() {
   }
 }
 
-async function generate() {
-  if (generating) return;
-  generating = true;
-  $('gen').disabled = true;
-  const st = $('genStatus');
-  st.innerHTML = `<span class="${C.spin}"></span><span class="flex-1">AI 正在出 5 道新题，大约需要 1 分钟…</span>`;
-  st.classList.remove('hidden');
-  st.classList.add('flex');
+// ---------- 今日任务 ----------
+// 今天（北京时间）的日期，和后端给句子打的 batch 一致，不受手机时区影响
+const today = () => new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);
+const TASK_SOURCES = new Set(['daily', 'extra', 'manual']);
+
+/** 今日任务：今天生成的句子（每日任务 + 加练）。还差几句没生成、完成了几句 */
+function taskInfo() {
+  const d = today();
+  const list = sentences.filter((s) => s.batch === d && TASK_SOURCES.has(s.source));
+  const daily = list.filter((s) => s.source === 'daily').length;
+  const done = list.filter((s) => rec(s.id)?.done).length;
+  const missing = Math.max(0, practiceCfg.dailyCount - daily);
+  return { list, daily, done, missing, complete: list.length > 0 && done === list.length && missing === 0 };
+}
+
+const aiOk = () => (usage ? usage.aiReady : true);
+const LV_SHORT = { 'CET-4': '四级', 'CET-6': '六级' };
+
+function busyHTML() {
+  return `<div class="flex items-center gap-2.5 rounded-xl bg-raise px-3 py-2.5 text-[14px]"><span class="${C.spin}"></span>
+    <span class="flex-1">AI 正在出 ${taskBusyN} 道${esc(levelText(practiceCfg.levels))}的题，${taskBusyN > 5 ? '一两分钟' : '大约 1 分钟'}，可以先练句库里的旧句子。</span></div>`;
+}
+
+function errHTML() {
+  return taskErr ? `<div class="flex items-center gap-2.5 rounded-xl bg-bad-soft px-3 py-2.5 text-[14px]"><span class="flex-1">${esc(taskErr)}</span><button class="${C.btnSmall}" data-act="closeTaskErr">知道了</button></div>` : '';
+}
+
+/** 加练：选句数 + 开始按钮（任务卡片和完成页共用） */
+function extraHTML(primary) {
+  const max = practiceCfg.maxDaily || 10;
+  const stepBtn = 'flex h-9 w-9 cursor-pointer items-center justify-center text-[18px] leading-none transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-35';
+  return `<div class="flex flex-wrap items-center gap-2.5">
+    <div class="inline-flex items-center rounded-full border-[1.5px] border-line bg-sheet">
+      <button data-act="extraMinus" aria-label="少一句" class="${stepBtn}" ${extraCount <= 1 ? 'disabled' : ''}>−</button>
+      <span data-extra-count class="min-w-[2.2em] text-center font-mono text-[16px] tabular-nums" aria-live="polite">${extraCount}</span>
+      <button data-act="extraPlus" aria-label="多一句" class="${stepBtn}" ${extraCount >= max ? 'disabled' : ''}>+</button>
+    </div>
+    <span class="text-[14px] text-muted">句</span>
+    <button class="${primary ? C.btnPrimary : C.btn}" data-act="extraGo" ${aiOk() && !taskBusy ? '' : 'disabled'}>开始加练</button>
+  </div>`;
+}
+
+function renderTask() {
+  const el = $('task');
+  if (!loaded) {
+    el.innerHTML = `<span class="${C.label}">今日任务</span><div class="${C.shim} w-[60%]"></div>`;
+    return;
+  }
+  const t = taskInfo();
+  const head = `<div class="flex flex-wrap items-center gap-x-2.5 gap-y-1">
+    <span class="${C.label}">今日任务</span>
+    <span class="text-[13px] text-muted">${esc(levelText(practiceCfg.levels))} · 每天 ${practiceCfg.dailyCount} 句</span>
+    <button class="ml-auto cursor-pointer text-[13px] text-accent underline underline-offset-4" data-act="taskSettings">调整</button></div>`;
+  let body = '';
+  if (!t.list.length) {
+    body = taskBusy
+      ? busyHTML()
+      : aiOk()
+        ? `<p class="m-0 text-[14.5px]">今天的 ${practiceCfg.dailyCount} 句还没生成。${practiceCfg.autoDaily ? `每天 ${esc(practiceCfg.dailyAt)} 会自动生成，` : ''}也可以现在生成。</p>
+          <div class="${C.row}"><button class="${C.btnPrimary}" data-act="genDaily">现在生成今天的 ${practiceCfg.dailyCount} 句</button></div>`
+        : `<p class="m-0 text-[14.5px]">还没配置 AI 模型，没法生成今天的句子。</p><div class="${C.row}"><button class="${C.btnPrimary}" data-act="taskSettings">去设置模型</button></div>`;
+  } else {
+    const pct = Math.round((t.done / (t.list.length + t.missing)) * 100);
+    const bar = t.list
+      .map((s, i) => {
+        const done = rec(s.id)?.done;
+        const isCur = cur && cur.id === s.id && !showDone;
+        return `<button data-sid="${esc(s.id)}" aria-label="今日第 ${i + 1} 句${done ? '，已完成' : ''}" class="group flex min-w-0 flex-1 cursor-pointer py-1.5">
+          <span class="h-2 w-full rounded-full transition-colors ${done ? 'bg-ok' : isCur ? 'bg-accent' : 'bg-line group-hover:bg-mid'}"></span></button>`;
+      })
+      .join('') + Array.from({ length: t.missing }, () => '<span class="flex min-w-0 flex-1 py-1.5"><span class="h-2 w-full rounded-full border border-dashed border-line"></span></span>').join('');
+    body = `<div class="flex items-baseline gap-2">
+        <b class="font-mono text-[26px] leading-none font-medium tabular-nums ${t.complete ? 'text-ok' : ''}">${t.done}</b>
+        <span class="text-[14px] text-muted">/ ${t.list.length + t.missing} 句完成</span>
+        ${t.complete ? '<span class="ml-auto rounded-full bg-ok-soft px-2.5 py-0.5 text-[13px] font-semibold whitespace-nowrap text-ok">✓ 已完成</span>' : `<span class="ml-auto font-mono text-[12px] text-muted">${pct}%</span>`}
+      </div>
+      <div class="flex gap-1" role="group" aria-label="今日任务进度">${bar}</div>
+      ${taskBusy ? busyHTML() : `<div class="${C.row}">
+        ${t.missing ? `<button class="${C.btnPrimary} px-3 py-1.5 text-[13.5px]" data-act="genDaily" ${aiOk() ? '' : 'disabled'}>补齐 ${t.missing} 句</button>` : ''}
+        ${t.complete && !showDone ? `<button class="${C.btnSmall}" data-act="showDone">查看完成页</button>` : ''}
+        <button class="${C.btnSmall}" data-act="extraToggle" aria-expanded="${extraOpen}">＋ 加练</button>
+      </div>
+      ${extraOpen ? `<div data-extra class="flex flex-col gap-1.5 rounded-xl bg-raise px-3 py-2.5">${extraHTML(false)}<span class="text-[12.5px] text-muted">加练的句子算进今天的任务，难度按设置：${esc(levelText(practiceCfg.levels))}。</span></div>` : ''}`}`;
+  }
+  el.innerHTML = head + body + errHTML();
+}
+
+/** 完成页：今日任务全部完成后，练习页显示它，代替句子和三个步骤 */
+function renderDone(enter) {
+  const el = $('doneView');
+  const t = taskInfo();
+  const on = showDone && t.complete;
+  if (!on) showDone = false;
+  el.classList.toggle('hidden', !on);
+  el.classList.toggle('flex', on);
+  $('work').classList.toggle('hidden', on);
+  $('work').classList.toggle('flex', !on);
+  if (!on) {
+    el.innerHTML = '';
+    return;
+  }
+  const count = (lv) => t.list.filter((s) => s.level === lv).length;
+  const bests = t.list.map((s) => (atts(s.id).length ? Math.max(...atts(s.id).map((a) => a.total ?? 0)) : null));
+  const scored = bests.filter((b) => b != null);
+  const graded = t.list.reduce((n, s) => n + atts(s.id).length, 0);
+  const avg = scored.length ? Math.round(scored.reduce((a, b) => a + b, 0) / scored.length) : null;
+  const stat = (n, label) => `<span class="flex flex-col items-center gap-0.5"><b class="font-mono text-[22px] leading-none font-medium tabular-nums">${n}</b><span class="text-[12.5px] text-muted">${label}</span></span>`;
+  const lv = [['CET-4', '四级'], ['CET-6', '六级']].filter(([k]) => count(k)).map(([k, n]) => `${n} ${count(k)} 句`).join(' · ');
+  el.innerHTML = `<section class="flex flex-col items-center gap-2.5 rounded-2xl border border-line bg-sheet px-5 pt-7 pb-6 text-center">
+      <span data-donecheck class="flex h-16 w-16 items-center justify-center rounded-full bg-ok text-on-accent"><svg class="h-8 w-8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></span>
+      <h2 class="m-0 text-[22px] font-semibold">今日任务完成</h2>
+      <p class="m-0 text-[14.5px] text-muted">${t.list.length} 句全部完成${lv ? ` · ${lv}` : ''}</p>
+      <div class="mt-2 flex flex-wrap justify-center gap-x-8 gap-y-3">${stat(t.list.length, '完成句数')}${stat(graded, 'AI 批改')}${avg != null ? stat(avg, '平均最高分') : ''}</div>
+    </section>
+    <section class="flex flex-col gap-3 rounded-2xl border border-line bg-sheet px-4 py-4">
+      <div class="flex flex-col gap-0.5"><b class="text-[16px]">还想再练？</b><span class="text-[13px] text-muted">加练的句子会加进今天的任务，难度按设置：${esc(levelText(practiceCfg.levels))}。</span></div>
+      ${taskBusy ? busyHTML() : extraHTML(true)}
+      ${errHTML()}
+    </section>
+    <section class="flex flex-col gap-2">
+      <span class="${C.label}">今天的句子 · 点开复习</span>
+      ${t.list
+        .map((s, i) => {
+          const b = bests[i];
+          const tone = b != null ? TONE[scoreTone(b)] : null;
+          return `<button data-sid="${esc(s.id)}" class="grid cursor-pointer grid-cols-[auto_1fr_auto] items-center gap-3 rounded-xl border border-line bg-sheet px-3.5 py-2.5 text-left transition-colors hover:border-accent">
+            <span class="rounded-full border border-line px-2 py-px font-mono text-[11.5px] text-muted">${esc(LV_SHORT[s.level] || s.level || '—')}</span>
+            <span class="flex min-w-0 flex-col"><span class="truncate font-en text-[15px]">${esc(plain(s))}</span><span class="truncate text-[12.5px] text-muted">${esc(s.focus || '')}</span></span>
+            <span class="font-mono text-[15px] tabular-nums ${tone ? tone.text : 'text-ok'}">${b ?? '✓'}</span></button>`;
+        })
+        .join('')}
+    </section>
+    <p class="m-0 text-center text-[13px] text-muted">${practiceCfg.autoDaily ? `明天 ${esc(practiceCfg.dailyAt)} 会自动准备新的 ${practiceCfg.dailyCount} 句。` : ''}<button class="cursor-pointer text-accent underline underline-offset-4" data-act="taskSettings">调整每日任务</button></p>`;
+  if (enter || celebrate) A.enter(el.children);
+  if (celebrate) {
+    celebrate = false;
+    const c = el.querySelector('[data-donecheck]');
+    A.pop(c);
+    const r = c.getBoundingClientRect();
+    setTimeout(() => A.burst(r.left + r.width / 2, r.top + r.height / 2), 120);
+  }
+}
+
+function showDonePage() {
+  if (!taskInfo().complete) return;
+  if (speaking) stopSpeak();
+  A.toastOut($('toast'));
+  showDone = true;
+  view = 'practice';
+  renderViews();
+  renderTask();
+  renderDone(true);
+  window.scrollTo({ top: 0, behavior: A.motion ? 'smooth' : 'auto' });
+}
+
+/** 生成今日任务（kind=daily，没生成或要补齐时）或加练（kind=extra） */
+async function generateTask(kind) {
+  if (taskBusy) return;
+  taskBusyN = kind === 'daily' ? taskInfo().missing || practiceCfg.dailyCount : extraCount;
+  taskBusy = kind;
+  taskErr = '';
+  renderTask();
+  renderDone(false);
   try {
-    const r = await api.generate();
-    st.classList.add('hidden');
-    st.classList.remove('flex');
-    const added = await checkNewSentences();
-    const first = r.added[0];
-    if (first && sentences.some((x) => x.id === first)) open(first);
-    if (!added) toast(`新增 ${r.added.length} 句，已为你打开第一句`);
+    const r = await api.generate(kind === 'daily' ? { kind } : { kind, count: extraCount });
+    await checkNewSentences(true);
+    usage = await api.usage().catch(() => usage);
+    taskBusy = '';
+    extraOpen = false;
+    const short = taskBusyN - r.added.length;
+    toast(`新增 ${r.added.length} 句${short > 0 ? `，有 ${short} 句没通过检查${kind === 'daily' ? '，可以点“补齐”' : ''}` : ''}`);
+    const first = r.added.find((id) => sentences.some((x) => x.id === id));
+    if (first) {
+      open(first);
+      window.scrollTo({ top: 0, behavior: A.motion ? 'smooth' : 'auto' });
+    } else {
+      renderTask();
+      renderDone(false);
+    }
   } catch (e) {
-    st.innerHTML = `<span class="flex-1">${esc(e.message)}</span><button class="${C.btnSmall}" data-act="closeGen">知道了</button>`;
-  } finally {
-    generating = false;
-    $('gen').disabled = false;
+    taskBusy = '';
+    taskErr = e.message;
+    if (e.status === 409) await checkNewSentences(true); // 别处已经生成了
+    renderTask();
+    renderDone(false);
+  }
+}
+
+function onTaskClick(e) {
+  const b = e.target.closest('[data-sid]');
+  if (b) {
+    open(b.dataset.sid);
+    $('sheet').scrollIntoView({ behavior: A.motion ? 'smooth' : 'auto', block: 'start' });
+    return;
+  }
+  const a = e.target.closest('[data-act]');
+  if (!a) return;
+  const max = practiceCfg.maxDaily || 10;
+  switch (a.dataset.act) {
+    case 'genDaily':
+      generateTask('daily');
+      return;
+    case 'extraGo':
+      generateTask('extra');
+      return;
+    case 'extraToggle':
+      extraOpen = !extraOpen;
+      renderTask();
+      if (extraOpen) A.slideIn($('task').querySelector('[data-extra]'));
+      return;
+    case 'extraMinus':
+    case 'extraPlus':
+      extraCount = Math.min(max, Math.max(1, extraCount + (a.dataset.act === 'extraPlus' ? 1 : -1)));
+      document.querySelectorAll('[data-extra-count]').forEach((x) => {
+        x.textContent = extraCount;
+        A.pop(x);
+      });
+      document.querySelectorAll('[data-act="extraMinus"]').forEach((x) => (x.disabled = extraCount <= 1));
+      document.querySelectorAll('[data-act="extraPlus"]').forEach((x) => (x.disabled = extraCount >= max));
+      return;
+    case 'showDone':
+      showDonePage();
+      return;
+    case 'taskSettings':
+      showView('settings');
+      return;
+    case 'closeTaskErr':
+      taskErr = '';
+      renderTask();
+      renderDone(false);
+      return;
+    default:
   }
 }
 
@@ -841,7 +1086,7 @@ async function generate() {
 let toastTimer = null;
 function toast(msg, action) {
   const t = $('toast');
-  t.innerHTML = `<span>${esc(msg)}</span>${action ? `<button class="cursor-pointer rounded-full bg-accent px-3 py-1 text-[13.5px] font-semibold text-on-accent">${esc(action.label)}</button>` : ''}`;
+  t.innerHTML = `<span>${esc(msg)}</span>${action ? `<button class="flex-none cursor-pointer rounded-full bg-accent px-3 py-1 text-[13.5px] font-semibold whitespace-nowrap text-on-accent">${esc(action.label)}</button>` : ''}`;
   t.style.paddingRight = action ? '8px' : '18px';
   if (action) t.querySelector('button').onclick = () => {
     action.fn();
@@ -896,14 +1141,9 @@ $('tabs').addEventListener('click', (e) => {
 });
 $('prev').onclick = () => move(-1);
 $('next').onclick = () => move(1);
-$('gen').onclick = generate;
 $('more').onclick = onDelete;
-$('genStatus').addEventListener('click', (e) => {
-  if (e.target.closest('[data-act="closeGen"]')) {
-    $('genStatus').classList.add('hidden');
-    $('genStatus').classList.remove('flex');
-  }
-});
+$('task').addEventListener('click', onTaskClick);
+$('doneView').addEventListener('click', onTaskClick);
 $('dict').onclick = () => {
   dictMode = !dictMode;
   wordSel = null;
@@ -1025,7 +1265,11 @@ $('panel').addEventListener('click', (e) => {
       const rct = opt.getBoundingClientRect();
       A.burst(rct.left + rct.width / 2, rct.top + rct.height / 2);
       A.pop($('bank').querySelector(`[data-sid="${CSS.escape(cur.id)}"]`));
-      toast(`第 ${sentences.indexOf(cur) + 1} 句完成`);
+      const t = taskInfo();
+      if (t.complete && t.list.some((x) => x.id === cur.id)) {
+        celebrate = true;
+        toast('今日任务全部完成！', { label: '查看', fn: () => showDonePage() });
+      } else toast(`第 ${sentences.indexOf(cur) + 1} 句完成`);
     }
     return;
   }
@@ -1083,6 +1327,9 @@ $('panel').addEventListener('click', (e) => {
     case 'next':
       move(1);
       return;
+    case 'showDone':
+      showDonePage();
+      return;
     case 'gosettings':
       showView('settings');
       return;
@@ -1102,12 +1349,21 @@ document.addEventListener('visibilitychange', () => {
 setInterval(checkNewSentences, 10 * 60 * 1000);
 
 // ---------- 设置页 ----------
+const taskSettings = createTaskSettings({
+  root: $('taskSettings'),
+  toast,
+  onChange: (p) => {
+    practiceCfg = p;
+    renderTask();
+  },
+});
 const settingsView = createSettingsView({
-  root: $('viewSettings'),
+  root: $('llmSettings'),
   toast,
   onSaved: async () => {
     usage = await api.usage().catch(() => usage);
     if (cur && step === 3) renderPanel(false);
+    renderTask();
   },
 });
 

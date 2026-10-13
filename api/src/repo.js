@@ -52,6 +52,14 @@ export async function hasDailyFor(day) {
   return rows[0].n > 0;
 }
 
+export async function countDailyFor(day) {
+  const { rows } = await query(
+    `SELECT count(*)::int AS n FROM sentences WHERE source = 'daily' AND batch = $1::date`,
+    [day],
+  );
+  return rows[0].n;
+}
+
 /** 已存在同 id 时跳过；返回是否真的插入了 */
 export async function insertSentence(s) {
   const { rows } = await query(

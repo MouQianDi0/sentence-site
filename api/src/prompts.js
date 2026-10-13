@@ -41,13 +41,25 @@ segs 规则（非常重要）：
 opts：恰好 3 个，ok 为 true 的那个与 ref 一致；另外两个分别示范“逐词硬译 / 翻译腔”和“理解错结构或漏译”的典型错误，why 40字内。
 words 给 4-6 个较难的词；phrases 给 2-3 个固定搭配，m 必须是句中连续出现的原文。`;
 
-export function generatePrompt(n, recent) {
+const LEVEL_SPEC = {
+  'CET-4': 'CET-4：20-32 个词，包含 2 种结构，词汇以四级大纲为主，话题贴近校园和日常社会生活。',
+  'CET-6': 'CET-6：28-45 个词，包含 2-3 种结构（可以嵌套），可以用六级及以上难度的词汇和更抽象的话题。',
+};
+
+/** plan：每句的难度，例如 ['CET-6', 'CET-4', 'CET-4']，按顺序出题 */
+export function generatePrompt(plan, recent, topics = null) {
+  const n = plan.length;
   const list = recent.length
     ? recent.map((s) => `- ${plainText(s.segs).split(' ').slice(0, 12).join(' ')}…（${s.focus}）`).join('\n')
     : '（暂无）';
-  return `你是大学英语四六级长难句教研老师。请原创 ${n} 个适合 CET-4/6 的英文长难句，用于翻译练习。
+  const levels = [...new Set(plan)];
+  const counts = levels.map((l) => `${l} ${plan.filter((x) => x === l).length} 句`).join('、');
+  const order = plan.map((l, i) => `第 ${i + 1} 句 ${l}`).join('，');
+  return `你是大学英语四六级长难句教研老师。请原创 ${n} 个英文长难句，用于翻译练习。
+难度：${counts}。按顺序出：${order}。每句的 level 字段照此填写，只能是 "CET-4" 或 "CET-6"。
+${levels.map((l) => `- ${LEVEL_SPEC[l]}`).join('\n')}
 要求：
-- CET-4 和 CET-6 都要有；每句 22-45 个词，话题互不相同（科技、教育、环境、健康、社会、经济、文化、职场等），语言自然，像真题阅读里的句子。
+- 话题互不相同（${topics ? `从这些话题里选：${topics.join('、')}` : '科技、教育、环境、健康、社会、经济、文化、职场等'}），语言自然，像真题阅读里的句子。
 - 每句至少包含两种结构（定语从句、名词性从句、状语从句、非谓语、形式主语、比较、not…but 等），结构组合尽量和已有句子不同。
 - 不要和这些已有句子重复：
 ${list}

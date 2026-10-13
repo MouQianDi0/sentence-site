@@ -90,7 +90,7 @@ export function createSettingsView({ root, toast, onSaved }) {
       ? `<div class="flex flex-wrap gap-x-4 gap-y-1 border-t border-line pt-3 text-[13px] text-muted">
           <span>今天批改 <b class="font-mono font-medium text-ink">${usage.grades}</b> / ${usage.limits.grade}</span>
           <span>查词 <b class="font-mono font-medium text-ink">${usage.lookups}</b> / ${usage.limits.lookup}</span>
-          <span>手动出题 <b class="font-mono font-medium text-ink">${usage.gens}</b> / ${usage.limits.generate}</span></div>`
+          <span>加练出题 <b class="font-mono font-medium text-ink">${usage.gens}</b> / ${usage.limits.generate}</span></div>`
       : '';
     return `<div class="${C.card} flex flex-col gap-3 px-4 py-3.5">
       <div class="flex items-start gap-3"><span class="mt-[7px] h-2.5 w-2.5 flex-none rounded-full ${dot}"></span>

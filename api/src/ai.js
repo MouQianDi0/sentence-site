@@ -5,9 +5,18 @@ import { LlmError } from './llm.js';
 import { gradePrompt, lookupPrompt, generatePrompt } from './prompts.js';
 import { checkSentence } from './validate.js';
 import { shanghaiDate, shanghaiClock } from './time.js';
+import { LEVELS, planLevels } from './practice.js';
 
 const clamp = (v, max) => Math.max(0, Math.min(max, Math.round(Number(v) || 0)));
 const str = (v, max) => String(v ?? '').trim().slice(0, max);
+const shuffleCopy = (arr) => {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+};
 
 export function toHttpError(e) {
   if (e instanceof HttpError) return e;
@@ -105,60 +114,132 @@ export function createAi({ cfg, llm, log = console }) {
     return { word, data, cached: false };
   }
 
-  /** 生成 n 句并写入数据库。不足 n 句时最多补 2 轮。返回新句子的 id。 */
-  async function generate({ source = 'manual', n = 5 } = {}) {
-    if (source === 'manual') {
-      await checkLimit('gens', cfg.limits.generate, '今天手动生成的次数用完了（{n} 次）');
-    }
-    const day = shanghaiDate();
-    const clock = shanghaiClock();
-    const now = Date.now();
-    const accepted = [];
-    const reasons = [];
-    for (let round = 0; round < 3 && accepted.length < n; round++) {
-      const recent = await repo.recentSentences(40);
-      let result;
-      try {
-        result = await llm.chatJson({
-          prompt: generatePrompt(n - accepted.length, recent),
-          model: cfg.llm.mainModel,
-          maxTokens: 8000,
-          temperature: 0.8,
-          timeoutMs: Math.max(cfg.llm.timeoutMs, 180_000),
-        });
-      } catch (e) {
-        if (e instanceof LlmError && e.code === 'invalid_json' && round < 2) {
-          reasons.push('返回格式不对');
-          continue;
+  /** 模型写的难度统一成 CET-4 / CET-6，认不出来返回空 */
+  const normLevel = (v) => (/6/.test(String(v)) ? 'CET-6' : /4/.test(String(v)) ? 'CET-4' : '');
+  const CHUNK = 5; // 一次最多让模型出 5 句，句数多时分几批同时请求，避免回复太长被截断
+  const TOPICS = ['科技', '教育', '环境', '健康', '社会', '经济', '文化', '职场', '城市生活', '心理', '历史', '媒体'];
+  let dailyBusy = false;
+
+  /** 从还缺的句数里取一批（两种难度轮流取），返回这批每句的难度 */
+  function takeChunk(need) {
+    const out = [];
+    const left = { ...need };
+    while (out.length < CHUNK && LEVELS.some((l) => left[l] > 0)) {
+      for (const l of LEVELS) {
+        if (left[l] > 0 && out.length < CHUNK) {
+          out.push(l);
+          left[l] -= 1;
         }
-        throw toHttpError(e);
-      }
-      const list = Array.isArray(result.data) ? result.data : result.data?.sentences;
-      for (const item of Array.isArray(list) ? list : []) {
-        if (accepted.length >= n) break;
-        const checked = checkSentence(item, { strict: true });
-        if (!checked.ok) {
-          reasons.push(checked.reason);
-          continue;
-        }
-        const idx = accepted.length + 1;
-        const id = source === 'daily'
-          ? `s-${day.replace(/-/g, '')}-d${idx}`
-          : `s-${day.replace(/-/g, '')}-${clock}-${idx}`;
-        const inserted = await repo.insertSentence({
-          ...checked.value,
-          id,
-          created: new Date(now + idx).toISOString(),
-          batch: day,
-          source,
-        });
-        if (inserted) accepted.push(id);
       }
     }
-    if (reasons.length) log.warn?.(`[ai] 生成时丢弃：${reasons.join('；')}`);
-    if (!accepted.length) throw new HttpError(502, 'AI 这次出的题都没通过校验，再试一次');
-    await repo.bumpUsage(day, 'gens');
-    return accepted;
+    return out;
+  }
+
+  /**
+   * 生成 n 句并写入数据库，返回新句子的 id。
+   * source：daily = 今日任务（不算进手动出题次数），extra = 加练。
+   * levels：要出的难度，两种都选时各占一半、顺序随机。句子没通过校验或难度不对时会补出，最多多请求 2 次。
+   */
+  async function generate({ source = 'extra', n = 5, levels = LEVELS } = {}) {
+    if (source === 'daily') {
+      if (dailyBusy) throw new HttpError(409, '今天的任务正在生成，稍等一下');
+      dailyBusy = true;
+    }
+    try {
+      if (source !== 'daily') await checkLimit('gens', cfg.limits.generate, '今天加练出题的次数用完了（{n} 次）');
+      const day = shanghaiDate();
+      const clock = shanghaiClock();
+      const now = Date.now();
+      const offset = source === 'daily' ? await repo.countDailyFor(day) : 0;
+      const need = {};
+      for (const l of planLevels(n, levels)) need[l] = (need[l] || 0) + 1;
+      const accepted = [];
+      const reasons = [];
+      const recentDb = await repo.recentSentences(40);
+      const ask = async (plan, topics) => {
+        try {
+          const r = await llm.chatJson({
+            prompt: generatePrompt(plan, [...accepted, ...recentDb].slice(0, 50), topics),
+            model: cfg.llm.mainModel,
+            maxTokens: 8000,
+            temperature: 0.8,
+            timeoutMs: Math.max(cfg.llm.timeoutMs, 180_000),
+          });
+          const list = Array.isArray(r.data) ? r.data : r.data?.sentences;
+          return { list: Array.isArray(list) ? list : [] };
+        } catch (e) {
+          return { error: e };
+        }
+      };
+      const take = (list) => {
+        for (const item of list) {
+          if (accepted.length >= n) break;
+          const checked = checkSentence(item, { strict: true });
+          if (!checked.ok) {
+            reasons.push(checked.reason);
+            continue;
+          }
+          const level = normLevel(checked.value.level);
+          if (!need[level]) {
+            reasons.push(`难度 ${checked.value.level || '未标注'} 不是这次要的`);
+            continue;
+          }
+          need[level] -= 1;
+          accepted.push({ ...checked.value, level });
+        }
+      };
+
+      // 第一轮：按 5 句一批同时请求，每批分到不同的话题，句数多时也不会等太久
+      const firstPlan = [];
+      for (const l of LEVELS) for (let i = 0; i < (need[l] || 0); i++) firstPlan.push(l);
+      const plans = [];
+      const shuffled = shuffleCopy(firstPlan);
+      for (let i = 0; i < shuffled.length; i += CHUNK) plans.push(shuffled.slice(i, i + CHUNK));
+      const topicStart = Math.floor(Math.random() * TOPICS.length);
+      const topicsFor = (k) => Array.from({ length: 6 }, (_, j) => TOPICS[(topicStart + k * 6 + j) % TOPICS.length]);
+      const first = await Promise.all(plans.map((plan, k) => ask(plan, plans.length > 1 ? topicsFor(k) : null)));
+      let lastError = null;
+      for (const r of first) {
+        if (r.error) {
+          lastError = r.error;
+          reasons.push(r.error.message);
+        } else take(r.list);
+      }
+      // 认证失败、额度用完这类错误，补出也没用
+      const fatal = (e) => e instanceof LlmError && ['auth', 'rate_limited', 'not_configured'].includes(e.code);
+      // 补出：没通过校验或难度不对的，最多再请求 2 次
+      for (let round = 0; round < 2 && accepted.length < n && !(lastError && fatal(lastError)); round++) {
+        const r = await ask(shuffleCopy(takeChunk(need)), null);
+        if (r.error) {
+          lastError = r.error;
+          reasons.push(r.error.message);
+          if (fatal(r.error)) break;
+        } else take(r.list);
+      }
+      if (!accepted.length && lastError) throw toHttpError(lastError);
+      if (reasons.length) log.warn?.(`[ai] 生成时丢弃：${reasons.join('；')}`);
+
+      // 打乱顺序后再写入，四级六级混着出现。编号被占用时（删过句子、同一秒内加练两次）顺延
+      const ids = [];
+      const d = day.replace(/-/g, '');
+      let next = source === 'daily' ? offset + 1 : 1;
+      for (const item of shuffleCopy(accepted)) {
+        const created = new Date(now + ids.length + 1).toISOString();
+        for (let tries = 0; tries < 30; tries++, next++) {
+          const id = source === 'daily' ? `s-${d}-d${next}` : `s-${d}-${clock}-${next}`;
+          if (await repo.insertSentence({ ...item, id, created, batch: day, source })) {
+            ids.push(id);
+            next++;
+            break;
+          }
+        }
+      }
+      if (!ids.length) throw new HttpError(502, 'AI 这次出的题都没通过校验，再试一次');
+      if (source !== 'daily') await repo.bumpUsage(day, 'gens');
+      return ids;
+    } finally {
+      if (source === 'daily') dailyBusy = false;
+    }
   }
 
   return { grade, lookup, generate };

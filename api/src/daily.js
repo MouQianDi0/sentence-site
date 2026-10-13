@@ -1,8 +1,9 @@
-// 每天北京时间 7:50（可在 .env 里改）自动出 5 句。服务重启后如果当天还没出题，也会补上。
+// 每天北京时间 7:50（可在 .env 里改）自动生成今日任务：句数和难度按网站“设置”里的“每日任务”。
+// 服务重启后如果当天还没出题，也会补上。
 import * as repo from './repo.js';
 import { shanghaiDate, shanghaiParts } from './time.js';
 
-export function startDailyJob({ cfg, ai, llm, log = console, intervalMs = 60_000 }) {
+export function startDailyJob({ cfg, ai, llm, practice, log = console, intervalMs = 60_000 }) {
   if (!cfg.daily.enabled) return () => {};
   let running = false;
   let doneDay = null;
@@ -20,7 +21,8 @@ export function startDailyJob({ cfg, ai, llm, log = console, intervalMs = 60_000
         doneDay = day;
         return;
       }
-      const ids = await ai.generate({ source: 'daily', n: cfg.daily.count });
+      const p = practice ? practice.get() : { dailyCount: cfg.daily.count, levels: undefined };
+      const ids = await ai.generate({ source: 'daily', n: p.dailyCount, levels: p.levels });
       doneDay = day;
       log.log(`[daily] ${day} 新增 ${ids.length} 句：${ids.join(', ')}`);
     } catch (e) {

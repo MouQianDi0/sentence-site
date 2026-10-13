@@ -4,7 +4,7 @@ CREATE TABLE IF NOT EXISTS sentences (
   id         text PRIMARY KEY,              -- 沿用 s-20261013-01 这种格式
   created_at timestamptz NOT NULL DEFAULT now(),
   batch      date NOT NULL,
-  source     text NOT NULL CHECK (source IN ('seed','daily','manual')),
+  source     text NOT NULL CHECK (source IN ('seed','daily','manual','extra')),  -- extra = 加练
   level      text,                          -- CET-4 / CET-6
   focus      text,
   segs       jsonb NOT NULL,                -- [{r,t,n,k}]，*主句谓语* ^从句谓语^ 标记不变
@@ -56,3 +56,7 @@ CREATE TABLE IF NOT EXISTS settings (
   value      jsonb NOT NULL,
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- 升级旧数据库：允许加练（extra）的句子。每次启动都会执行，重复执行没有影响
+ALTER TABLE sentences DROP CONSTRAINT IF EXISTS sentences_source_check;
+ALTER TABLE sentences ADD CONSTRAINT sentences_source_check CHECK (source IN ('seed','daily','manual','extra'));

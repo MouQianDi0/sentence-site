@@ -10,6 +10,7 @@ import { createApp } from './app.js';
 import { createAi } from './ai.js';
 import { startDailyJob } from './daily.js';
 import { createSettings } from './settings.js';
+import { createPractice } from './practice.js';
 
 async function waitForDb(tries = 30) {
   for (let i = 1; i <= tries; i++) {
@@ -43,14 +44,18 @@ async function main() {
   // 网页上保存过模型配置时，优先用它，否则用 .env
   const settings = createSettings(config);
   await settings.load();
+  // 每日任务的句数和难度
+  const practice = createPractice(config);
+  await practice.load();
   const llm = createLlm(config);
-  const handler = createApp(config, { llm, settings });
+  const ai = createAi({ cfg: config, llm }); // 网页和每日定时任务共用一个，避免同时生成今日任务
+  const handler = createApp(config, { llm, settings, practice, ai });
   const server = http.createServer(handler);
   server.listen(config.port, () => {
     console.log(`[api] 已启动，端口 ${config.port}；AI 模型${llm.ready() ? `：${config.llm.mainModel}（${settings.view().source === 'page' ? '网页设置' : '.env'}）` : '：未配置，可以在网站的“设置”里填写'}`);
   });
 
-  const stopDaily = startDailyJob({ cfg: config, ai: createAi({ cfg: config, llm }), llm });
+  const stopDaily = startDailyJob({ cfg: config, ai, llm, practice });
 
   const shutdown = () => {
     stopDaily();
