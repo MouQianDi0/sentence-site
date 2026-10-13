@@ -1,0 +1,806 @@
+{
+ "exportedAt": "2026-10-14",
+ "sentences": [
+  {
+   "batch": "2026-10-13",
+   "created": "2026-10-13T08:00:00.001Z",
+   "focus": "多层定语从句",
+   "level": "CET-4",
+   "opts": [
+    {
+     "ok": true,
+     "t": "这项研究于上个月发表。研究人员发现，每晚睡眠不足六小时的人比睡眠充足的人更容易感冒。",
+     "why": "长定语拆成独立句，短定语“每晚睡眠不足六小时的”前置，读起来是中文。"
+    },
+    {
+     "ok": false,
+     "t": "开展了上个月被发表的这项研究的研究人员发现，每晚睡少于六小时的人比得到足够休息的那些人更可能抓住感冒。",
+     "why": "两层定语全堆在“研究人员”前面；“被发表”“抓住感冒”是逐词硬译。"
+    },
+    {
+     "ok": false,
+     "t": "研究人员上个月发现，睡眠不足的人更容易感冒。",
+     "why": "last month 修饰的是“发表”而不是“发现”，还漏了“六小时”。"
+    }
+   ],
+   "phrases": [
+    {
+     "m": "catch a cold",
+     "p": "catch a cold",
+     "zh": "感冒"
+    },
+    {
+     "m": "more likely to",
+     "p": "be likely to do",
+     "zh": "可能做某事"
+    },
+    {
+     "m": "less than",
+     "p": "less than",
+     "zh": "少于，不足"
+    }
+   ],
+   "ref": "这项研究于上个月发表。研究人员发现，每晚睡眠不足六小时的人比睡眠充足的人更容易感冒。",
+   "segs": [
+    {
+     "k": "main",
+     "n": "主语。",
+     "r": "main",
+     "t": "The researchers"
+    },
+    {
+     "k": "attr_r",
+     "n": "定语从句，修饰 researchers。",
+     "r": "attr",
+     "t": "who ^conducted^ the study,"
+    },
+    {
+     "k": "attr_n",
+     "n": "非限制性定语从句，修饰 the study，套在上一个从句里。",
+     "r": "attr",
+     "t": "which ^was published^ last month,"
+    },
+    {
+     "k": "main",
+     "n": "主句谓语。整句只有它不在任何从句里。",
+     "r": "main",
+     "t": "*found*"
+    },
+    {
+     "k": "noun_obj",
+     "n": "that 引导宾语从句，做 found 的宾语；people 是从句的主语。",
+     "r": "noun",
+     "t": "that people"
+    },
+    {
+     "k": "attr_r",
+     "n": "定语从句，修饰 people。",
+     "r": "attr",
+     "t": "who ^sleep^ less than six hours a night"
+    },
+    {
+     "k": "comparison",
+     "n": "宾语从句的谓语部分；than 引出比较对象 those。",
+     "r": "noun",
+     "t": "^are^ more likely to catch a cold than those"
+    },
+    {
+     "k": "attr_r",
+     "n": "定语从句，修饰 those。",
+     "r": "attr",
+     "t": "who ^get^ enough rest."
+    }
+   ],
+   "source": "seed",
+   "tip": "两个定语从句叠在主语上，中文放不下。把 which was published last month 拆成独立短句“这项研究于上个月发表”，主干就清爽了。",
+   "trap": "",
+   "trunk": "The researchers found that people are more likely to catch a cold.",
+   "trunkZh": "研究人员发现，（某类）人更容易感冒。",
+   "words": [
+    {
+     "lemma": "researcher",
+     "pos": "n.",
+     "w": "researchers",
+     "zh": "研究人员"
+    },
+    {
+     "lemma": "conduct",
+     "pos": "v.",
+     "w": "conducted",
+     "zh": "开展，实施"
+    },
+    {
+     "lemma": "publish",
+     "pos": "v.",
+     "w": "published",
+     "zh": "发表，出版"
+    },
+    {
+     "lemma": "likely",
+     "pos": "adj.",
+     "w": "likely",
+     "zh": "可能的"
+    },
+    {
+     "lemma": "rest",
+     "pos": "n.",
+     "w": "rest",
+     "zh": "休息"
+    }
+   ],
+   "id": "s-20261013-01"
+  },
+  {
+   "batch": "2026-10-13",
+   "created": "2026-10-13T08:00:00.002Z",
+   "focus": "让步状语 + 形式宾语",
+   "level": "CET-4",
+   "opts": [
+    {
+     "ok": true,
+     "t": "尽管在线学习能提供传统课堂无法提供的灵活性，但许多学生发现，没有了习惯的面对面交流，自己很难保持学习动力。",
+     "why": "补全“尽管……但……”；without 短语译成“没有了……”放在动作前，语序自然。"
+    },
+    {
+     "ok": false,
+     "t": "虽然在线学习提供传统课堂不能提供的灵活性，许多学生发现它困难保持动力没有他们习惯的面对面互动。",
+     "why": "把形式宾语 it 译成“它”，后半句照搬英文语序，读不通。"
+    },
+    {
+     "ok": false,
+     "t": "在线学习比传统课堂更灵活，所以许多学生不习惯面对面交流。",
+     "why": "原句是让步关系，不是因果，意思被改了。"
+    }
+   ],
+   "phrases": [
+    {
+     "m": "stay motivated",
+     "p": "stay motivated",
+     "zh": "保持积极性"
+    },
+    {
+     "m": "face-to-face",
+     "p": "face-to-face",
+     "zh": "面对面的"
+    },
+    {
+     "m": "are used to",
+     "p": "be used to (doing) sth",
+     "zh": "习惯于"
+    }
+   ],
+   "ref": "尽管在线学习能提供传统课堂无法提供的灵活性，但许多学生发现，没有了习惯的面对面交流，自己很难保持学习动力。",
+   "segs": [
+    {
+     "k": "adv_concession",
+     "n": "Although 引导让步状语从句：“尽管……”。",
+     "r": "adv",
+     "t": "Although online learning ^offers^ flexibility"
+    },
+    {
+     "k": "attr_r",
+     "n": "定语从句，修饰 flexibility。",
+     "r": "attr",
+     "t": "that traditional classrooms ^cannot provide^,"
+    },
+    {
+     "k": "main",
+     "n": "主句的主语和谓语。",
+     "r": "main",
+     "t": "many students *find*"
+    },
+    {
+     "k": "it_formal",
+     "n": "it 是形式宾语，真正的宾语在后面；difficult 是宾语补足语。",
+     "r": "main",
+     "t": "it difficult"
+    },
+    {
+     "k": "nf_inf",
+     "n": "不定式，真正的宾语。它不是谓语。",
+     "r": "nonfin",
+     "t": "to stay motivated"
+    },
+    {
+     "k": "adv_phrase",
+     "n": "介词短语作状语，表示条件：“没有……”。",
+     "r": "adv",
+     "t": "without the face-to-face interaction"
+    },
+    {
+     "k": "attr_omit",
+     "n": "省略了 that/which 的定语从句，修饰 interaction。",
+     "r": "attr",
+     "t": "they ^are used to^."
+    }
+   ],
+   "source": "seed",
+   "tip": "find it + 形容词 + to do 是高频结构，it 不要译成“它”，直接说“发现很难做某事”。",
+   "trap": "to stay 是不定式，不算谓语。",
+   "trunk": "Many students find it difficult to stay motivated.",
+   "trunkZh": "许多学生发现很难保持动力。",
+   "words": [
+    {
+     "lemma": "flexibility",
+     "pos": "n.",
+     "w": "flexibility",
+     "zh": "灵活性"
+    },
+    {
+     "lemma": "traditional",
+     "pos": "adj.",
+     "w": "traditional",
+     "zh": "传统的"
+    },
+    {
+     "lemma": "motivated",
+     "pos": "adj.",
+     "w": "motivated",
+     "zh": "有动力的，积极的"
+    },
+    {
+     "lemma": "interaction",
+     "pos": "n.",
+     "w": "interaction",
+     "zh": "互动，交流"
+    },
+    {
+     "lemma": "provide",
+     "pos": "v.",
+     "w": "provide",
+     "zh": "提供"
+    }
+   ],
+   "id": "s-20261013-02"
+  },
+  {
+   "batch": "2026-10-13",
+   "created": "2026-10-13T08:00:00.003Z",
+   "focus": "形式主语 + 被动",
+   "level": "CET-4",
+   "opts": [
+    {
+     "ok": true,
+     "t": "人们普遍认为，每天出于兴趣阅读的孩子，在学校的表现要好于很少翻书的孩子。",
+     "why": "被动转主动，补出“人们”；open a book 译成“翻书”，更地道。"
+    },
+    {
+     "ok": false,
+     "t": "它被广泛相信，每天为了快乐阅读的孩子在学校表现得比那些很少打开一本书的人更好。",
+     "why": "“它被广泛相信”是典型硬译；for pleasure 是“出于兴趣”，不是“为了快乐”。"
+    },
+    {
+     "ok": false,
+     "t": "每天阅读的孩子被广泛相信在学校表现更好。",
+     "why": "漏了比较对象（很少读书的孩子），也丢了 for pleasure。"
+    }
+   ],
+   "phrases": [
+    {
+     "m": "for pleasure",
+     "p": "for pleasure",
+     "zh": "出于兴趣，为了消遣"
+    },
+    {
+     "m": "it is widely believed",
+     "p": "It is widely believed that…",
+     "zh": "人们普遍认为……"
+    }
+   ],
+   "ref": "人们普遍认为，每天出于兴趣阅读的孩子，在学校的表现要好于很少翻书的孩子。",
+   "segs": [
+    {
+     "k": "it_formal",
+     "n": "It 是形式主语，真正的主语是后面整个 that 从句。谓语是被动语态 is believed。",
+     "r": "main",
+     "t": "It *is widely believed*"
+    },
+    {
+     "k": "noun_subj",
+     "n": "that 引导主语从句；children 是从句的主语。",
+     "r": "noun",
+     "t": "that children"
+    },
+    {
+     "k": "attr_r",
+     "n": "定语从句，修饰 children。",
+     "r": "attr",
+     "t": "who ^read^ for pleasure every day"
+    },
+    {
+     "k": "comparison",
+     "n": "主语从句的谓语；than 引出比较对象。",
+     "r": "noun",
+     "t": "^perform^ better at school than those"
+    },
+    {
+     "k": "attr_r",
+     "n": "定语从句，修饰 those。",
+     "r": "attr",
+     "t": "who rarely ^open^ a book."
+    }
+   ],
+   "source": "seed",
+   "tip": "It is believed / said / reported that… 固定译成“人们认为 / 据说 / 据报道……”，不要译成“它被认为”。",
+   "trap": "",
+   "trunk": "It is widely believed that children perform better.",
+   "trunkZh": "人们普遍认为，（某类）孩子表现更好。",
+   "words": [
+    {
+     "lemma": "widely",
+     "pos": "adv.",
+     "w": "widely",
+     "zh": "广泛地，普遍地"
+    },
+    {
+     "lemma": "believe",
+     "pos": "v.",
+     "w": "believed",
+     "zh": "认为，相信"
+    },
+    {
+     "lemma": "perform",
+     "pos": "v.",
+     "w": "perform",
+     "zh": "表现"
+    },
+    {
+     "lemma": "rarely",
+     "pos": "adv.",
+     "w": "rarely",
+     "zh": "很少"
+    }
+   ],
+   "id": "s-20261013-03"
+  },
+  {
+   "batch": "2026-10-13",
+   "created": "2026-10-13T08:00:00.004Z",
+   "focus": "分词作定语的陷阱",
+   "level": "CET-4",
+   "opts": [
+    {
+     "ok": true,
+     "t": "这项新政策旨在减少市中心的交通流量，却遭到了商户的批评。他们认为，客流减少意味着销售额下降。",
+     "why": "分词定语译成“旨在……”，加“却”表现转折；非限制性从句拆成独立句。"
+    },
+    {
+     "ok": false,
+     "t": "被设计来减少市中心交通的新政策已经被店主们批评了，他们争论更少的访客将意味着更低的销售。",
+     "why": "“被设计来”“争论”是字面直译；argue 在这里是“认为、主张”。"
+    },
+    {
+     "ok": false,
+     "t": "店主们为了减少市中心交通，批评了新政策。",
+     "why": "主语搞错了：想减少交通的是政策，不是店主。"
+    }
+   ],
+   "phrases": [
+    {
+     "m": "designed to reduce",
+     "p": "be designed to do",
+     "zh": "旨在做某事"
+    },
+    {
+     "m": "city center",
+     "p": "city center",
+     "zh": "市中心"
+    },
+    {
+     "m": "shop owners",
+     "p": "shop owner",
+     "zh": "店主，商户"
+    }
+   ],
+   "ref": "这项新政策旨在减少市中心的交通流量，却遭到了商户的批评。他们认为，客流减少意味着销售额下降。",
+   "segs": [
+    {
+     "k": "main",
+     "n": "主语。",
+     "r": "main",
+     "t": "The new policy,"
+    },
+    {
+     "k": "nf_pp",
+     "n": "过去分词短语作后置定语，修饰 policy。designed 像动词，但不是谓语。",
+     "r": "nonfin",
+     "t": "designed to reduce traffic in the city center,"
+    },
+    {
+     "k": "main",
+     "n": "主句谓语，现在完成时的被动语态。",
+     "r": "main",
+     "t": "*has been criticized*"
+    },
+    {
+     "k": "main",
+     "n": "by 引出动作的执行者。",
+     "r": "main",
+     "t": "by shop owners,"
+    },
+    {
+     "k": "attr_n",
+     "n": "非限制性定语从句，补充说明 shop owners。",
+     "r": "attr",
+     "t": "who ^argue^"
+    },
+    {
+     "k": "noun_obj",
+     "n": "宾语从句，做 argue 的宾语。",
+     "r": "noun",
+     "t": "that fewer visitors ^will mean^ lower sales."
+    }
+   ],
+   "source": "seed",
+   "tip": "逗号后的 who 从句可以直接拆成新句子“他们认为……”；has been criticized by 译成“遭到……批评”。",
+   "trap": "designed 是过去分词作定语，不是谓语，这是本句最容易选错的地方。",
+   "trunk": "The new policy has been criticized by shop owners.",
+   "trunkZh": "新政策遭到了商户的批评。",
+   "words": [
+    {
+     "lemma": "policy",
+     "pos": "n.",
+     "w": "policy",
+     "zh": "政策"
+    },
+    {
+     "lemma": "reduce",
+     "pos": "v.",
+     "w": "reduce",
+     "zh": "减少"
+    },
+    {
+     "lemma": "traffic",
+     "pos": "n.",
+     "w": "traffic",
+     "zh": "交通流量"
+    },
+    {
+     "lemma": "criticize",
+     "pos": "v.",
+     "w": "criticized",
+     "zh": "批评"
+    },
+    {
+     "lemma": "argue",
+     "pos": "v.",
+     "w": "argue",
+     "zh": "认为，主张"
+    },
+    {
+     "lemma": "sales",
+     "pos": "n.",
+     "w": "sales",
+     "zh": "销售额"
+    }
+   ],
+   "id": "s-20261013-04"
+  },
+  {
+   "batch": "2026-10-13",
+   "created": "2026-10-13T08:00:00.005Z",
+   "focus": "主语从句 + not A but B",
+   "level": "CET-6",
+   "opts": [
+    {
+     "ok": true,
+     "t": "最让科学家们吃惊的不是这一发现的规模，而是过去十年间冰层融化的速度之快。",
+     "why": "保留 not…but 的对比；how quickly 转成名词“速度之快”，结构工整。"
+    },
+    {
+     "ok": false,
+     "t": "什么最使科学家们惊讶的是不是发现的大小而是冰过去十年多快融化了。",
+     "why": "what 在这里不是疑问词“什么”；“是不是”还会产生歧义。"
+    },
+    {
+     "ok": false,
+     "t": "科学家们发现冰在过去十年融化得很快，他们很惊讶。",
+     "why": "丢了“不是……而是……”的对比，原句重点没了。"
+    }
+   ],
+   "phrases": [
+    {
+     "m": "over the past decade",
+     "p": "over the past decade",
+     "zh": "在过去十年里"
+    }
+   ],
+   "ref": "最让科学家们吃惊的不是这一发现的规模，而是过去十年间冰层融化的速度之快。",
+   "segs": [
+    {
+     "k": "noun_subj",
+     "n": "What 引导主语从句，整块做主句的主语。",
+     "r": "noun",
+     "t": "What ^surprised^ the scientists most"
+    },
+    {
+     "k": "main",
+     "n": "主句谓语（系动词）。",
+     "r": "main",
+     "t": "*was*"
+    },
+    {
+     "k": "notbut",
+     "n": "not A but B 结构：不是 A，而是 B。",
+     "r": "main",
+     "t": "not the size of the discovery but"
+    },
+    {
+     "k": "noun_pred",
+     "n": "how 引导表语从句，就是那个 B。",
+     "r": "noun",
+     "t": "how quickly the ice ^had melted^ over the past decade."
+    }
+   ],
+   "source": "seed",
+   "tip": "what 主语从句常译成“……的（是）”；not A but B 固定译“不是 A，而是 B”。",
+   "trap": "surprised 在主语从句里，是从句谓语；主句谓语是 was。",
+   "trunk": "What surprised the scientists was not A but B.",
+   "trunkZh": "让科学家吃惊的不是 A，而是 B。",
+   "words": [
+    {
+     "lemma": "surprise",
+     "pos": "v.",
+     "w": "surprised",
+     "zh": "使吃惊"
+    },
+    {
+     "lemma": "discovery",
+     "pos": "n.",
+     "w": "discovery",
+     "zh": "发现"
+    },
+    {
+     "lemma": "melt",
+     "pos": "v.",
+     "w": "melted",
+     "zh": "融化"
+    },
+    {
+     "lemma": "decade",
+     "pos": "n.",
+     "w": "decade",
+     "zh": "十年"
+    }
+   ],
+   "id": "s-20261013-05"
+  },
+  {
+   "batch": "2026-10-13",
+   "created": "2026-10-13T08:00:00.006Z",
+   "focus": "分词状语 + where 从句",
+   "level": "CET-6",
+   "opts": [
+    {
+     "ok": true,
+     "t": "她在国外生活了十年，回到家乡后发现很难重新适应那里的生活，因为一切似乎都变了。",
+     "why": "分词状语译成短句放前面；where 从句译出了隐含的因果关系。"
+    },
+    {
+     "ok": false,
+     "t": "已经在国外住了十年，她发现它很难重新调整到她家乡的生活，在那里一切似乎已经改变了。",
+     "why": "“发现它很难”“调整到生活”都是硬译，读着别扭。"
+    },
+    {
+     "ok": false,
+     "t": "她在国外住了十年，家乡的一切都改变了她。",
+     "why": "意思错了：是家乡变了，不是家乡改变了她。"
+    }
+   ],
+   "phrases": [
+    {
+     "m": "readjust to",
+     "p": "readjust to sth",
+     "zh": "重新适应"
+    },
+    {
+     "m": "seemed to have changed",
+     "p": "seem to have done",
+     "zh": "似乎已经……"
+    }
+   ],
+   "ref": "她在国外生活了十年，回到家乡后发现很难重新适应那里的生活，因为一切似乎都变了。",
+   "segs": [
+    {
+     "k": "nf_ing",
+     "n": "现在分词完成式作状语，表示时间或原因：在国外生活了十年之后。",
+     "r": "nonfin",
+     "t": "Having lived abroad for ten years,"
+    },
+    {
+     "k": "main",
+     "n": "主句主语和谓语。",
+     "r": "main",
+     "t": "she *found*"
+    },
+    {
+     "k": "it_formal",
+     "n": "it 是形式宾语，hard 是宾补。",
+     "r": "main",
+     "t": "it hard"
+    },
+    {
+     "k": "nf_inf",
+     "n": "不定式，真正的宾语。",
+     "r": "nonfin",
+     "t": "to readjust to life in her hometown,"
+    },
+    {
+     "k": "attr_where",
+     "n": "where 引导非限制性定语从句，修饰 hometown。",
+     "r": "attr",
+     "t": "where everything ^seemed^ to have changed."
+    }
+   ],
+   "source": "seed",
+   "tip": "where 从句表面是定语，实际在交代原因，可以译成“因为……”。",
+   "trap": "Having lived 和 to have changed 都是非谓语，不算。",
+   "trunk": "She found it hard to readjust to life in her hometown.",
+   "trunkZh": "她发现很难重新适应家乡的生活。",
+   "words": [
+    {
+     "lemma": "abroad",
+     "pos": "adv.",
+     "w": "abroad",
+     "zh": "在国外"
+    },
+    {
+     "lemma": "readjust",
+     "pos": "v.",
+     "w": "readjust",
+     "zh": "重新适应"
+    },
+    {
+     "lemma": "hometown",
+     "pos": "n.",
+     "w": "hometown",
+     "zh": "家乡"
+    },
+    {
+     "lemma": "seem",
+     "pos": "v.",
+     "w": "seemed",
+     "zh": "似乎"
+    }
+   ],
+   "id": "s-20261013-06"
+  }
+ ],
+ "records": [
+  {
+   "done": true,
+   "sid": "s-20261013-01",
+   "updated": "2026-10-13T10:19:09.003Z"
+  },
+  {
+   "attempts": [
+    {
+     "acc": 18,
+     "at": "2026-10-13T10:30:31.029Z",
+     "comp": 18,
+     "flu": 10,
+     "text": "尽管线上学习可以提供而传统学习不能提供的便捷性，但是很多学生很难保持积极性在他们习惯于没有面对面上课的时候",
+     "total": 46
+    }
+   ],
+   "choice": {
+    "ok": true,
+    "pick": 0
+   },
+   "done": true,
+   "draft": "尽管线上学习可以提供而传统学习不能提供的便捷性，但是很多学生很难保持积极性在他们习惯于没有面对面上课的时候",
+   "fb": {
+    "acc": 18,
+    "better": "尽管线上学习可以提供传统课堂无法提供的灵活性，但是很多学生发现，没有了习惯的面对面交流，很难保持学习动力。",
+    "comp": 18,
+    "flu": 10,
+    "good": [
+     "看出了 Although...many 的让步转折关系",
+     "译出了“提供传统课堂无法提供的灵活性”这一核心意思"
+    ],
+    "issues": [
+     {
+      "fix": "没有了习惯的面对面交流",
+      "src": "在他们习惯于没有面对面上课的时候",
+      "type": "误译",
+      "why": "把 without 误解为“习惯于没有面对面”，实际是缺少习惯的面对面交流"
+     },
+     {
+      "fix": "很多学生发现，没有了习惯的面对面交流，很难保持学习动力",
+      "src": "很多学生很难保持积极性在他们习惯于没有面对面上课的时候",
+      "type": "语序",
+      "why": "状语后置，是英语语序，不符合中文表达"
+     },
+     {
+      "fix": "可以提供传统课堂无法提供的灵活性",
+      "src": "可以提供而传统学习不能提供的便捷性",
+      "type": "翻译腔",
+      "why": "定语结构生硬，“传统学习”应为“传统课堂”"
+     },
+     {
+      "fix": "很多学生发现很难保持学习动力",
+      "src": "很多学生很难保持积极性",
+      "type": "漏译",
+      "why": "漏译 find it difficult 中的“发现”，“积极性”也不如“学习动力”准确"
+     }
+    ],
+    "level": "主干大意有，但误解多、语序乱",
+    "text": "尽管线上学习可以提供而传统学习不能提供的便捷性，但是很多学生很难保持积极性在他们习惯于没有面对面上课的时候",
+    "total": 46
+   },
+   "first": "2026-10-13T10:21:43.198Z",
+   "sid": "s-20261013-02",
+   "updated": "2026-10-13T10:31:49.648Z",
+   "verbs": {
+    "ok": 4,
+    "total": 4,
+    "wrong": 0
+   }
+  },
+  {
+   "attempts": [
+    {
+     "acc": 30,
+     "at": "2026-10-13T10:38:09.286Z",
+     "comp": 28,
+     "flu": 18,
+     "text": "人们普遍的认为在学校那些每天出于兴趣每天阅读的孩子们会比那些很少打开书的孩子们要更优秀些",
+     "total": 76
+    }
+   ],
+   "choice": {
+    "ok": true,
+    "pick": 0
+   },
+   "done": true,
+   "draft": "人们普遍的认为在学校那些每天出于兴趣每天阅读的孩子们会比那些很少打开书的孩子们要更优秀些",
+   "fb": {
+    "acc": 30,
+    "better": "人们普遍认为，每天出于兴趣阅读的孩子，在学校的表现比那些很少翻书的孩子更好。",
+    "comp": 28,
+    "flu": 18,
+    "good": [
+     "正确将 It is widely believed that 译为“人们普遍认为”",
+     "准确译出 read for pleasure 和 rarely open a book 的含义"
+    ],
+    "issues": [
+     {
+      "fix": "每天出于兴趣阅读的孩子",
+      "src": "在学校那些每天出于兴趣每天阅读的孩子们",
+      "type": "语序",
+      "why": "“在学校”位置不当，应放在“表现”处，且“每天”重复"
+     },
+     {
+      "fix": "在学校的表现比那些很少翻书的孩子更好",
+      "src": "会比那些很少打开书的孩子们要更优秀些",
+      "type": "用词",
+      "why": "perform better 指学习表现更好，“更优秀”过于笼统，且“会…要…些”啰嗦"
+     },
+     {
+      "fix": "人们普遍认为，",
+      "src": "人们普遍的认为",
+      "type": "用词",
+      "why": "“普遍”修饰动词时应用“地”，且此处可直接说“普遍认为”"
+     },
+     {
+      "fix": "孩子",
+      "src": "孩子们",
+      "type": "翻译腔",
+      "why": "“们”多次重复，显得啰嗦，带翻译腔"
+     }
+    ],
+    "level": "基本达意，但语序混乱、用词重复",
+    "text": "人们普遍的认为在学校那些每天出于兴趣每天阅读的孩子们会比那些很少打开书的孩子们要更优秀些",
+    "total": 76
+   },
+   "first": "2026-10-13T10:32:48.186Z",
+   "sid": "s-20261013-03",
+   "updated": "2026-10-13T10:39:04.069Z",
+   "verbs": {
+    "ok": 3,
+    "total": 4,
+    "wrong": 0
+   }
+  }
+ ]
+}

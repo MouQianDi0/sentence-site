@@ -1,0 +1,68 @@
+/* Tailwind CSS v4 入口。改了这里或 index.html / js 里的类名后，运行 web/build-css.sh 重新生成 app.css */
+@import "tailwindcss";
+@source "../index.html";
+@source "../js";
+
+/* 主题变量：浅色值写在 :root，深色值跟随系统切换。页面里只用 bg-paper、text-ink 这类工具类。 */
+:root {
+  --paper: #eaeef4; --sheet: #ffffff; --ink: #18202d; --muted: #596476; --line: #d3dae4; --raise: #f4f6fa;
+  --accent: #2a4bd1; --accent-soft: #e3e9ff; --on-accent: #ffffff;
+  --main: #2a4bd1; --main-soft: #d9e3ff;
+  --attr: #1d8248; --attr-soft: #d4f1dc;
+  --noun: #a87200; --noun-soft: #ffefbd;
+  --adv: #bf3557; --adv-soft: #ffdbe3;
+  --non: #6a42c4; --non-soft: #eadfff;
+  --ok: #1d8248; --ok-soft: #ddf3e5; --mid: #a87200; --mid-soft: #fff3d1; --bad: #c42f3c; --bad-soft: #fbe1e3;
+  --read: #ffe27a;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #10141b; --sheet: #181e28; --ink: #e5e9f0; --muted: #97a2b3; --line: #2a3340; --raise: #1f2632;
+    --accent: #86a0ff; --accent-soft: rgba(134, 160, 255, .16); --on-accent: #0c1120;
+    --main: #93abff; --main-soft: rgba(134, 160, 255, .24);
+    --attr: #72d79d; --attr-soft: rgba(90, 205, 135, .2);
+    --noun: #f0c65e; --noun-soft: rgba(240, 192, 70, .2);
+    --adv: #ff93ab; --adv-soft: rgba(255, 115, 145, .2);
+    --non: #bb9eff; --non-soft: rgba(175, 135, 255, .22);
+    --ok: #72d79d; --ok-soft: rgba(90, 205, 135, .15); --mid: #f0c65e; --mid-soft: rgba(240, 192, 70, .14); --bad: #ff7f88; --bad-soft: rgba(255, 100, 110, .15);
+    --read: rgba(255, 214, 90, .42);
+    color-scheme: dark;
+  }
+}
+
+@theme inline {
+  --color-paper: var(--paper);
+  --color-sheet: var(--sheet);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+  --color-line: var(--line);
+  --color-raise: var(--raise);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-on-accent: var(--on-accent);
+  --color-r-main: var(--main);
+  --color-r-main-soft: var(--main-soft);
+  --color-r-attr: var(--attr);
+  --color-r-attr-soft: var(--attr-soft);
+  --color-r-noun: var(--noun);
+  --color-r-noun-soft: var(--noun-soft);
+  --color-r-adv: var(--adv);
+  --color-r-adv-soft: var(--adv-soft);
+  --color-r-non: var(--non);
+  --color-r-non-soft: var(--non-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-mid: var(--mid);
+  --color-mid-soft: var(--mid-soft);
+  --color-bad: var(--bad);
+  --color-bad-soft: var(--bad-soft);
+  --color-read: var(--read);
+}
+
+@theme {
+  --font-en: ui-serif, "New York", Georgia, "Times New Roman", serif;
+  --font-zh: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  --font-head: "Songti SC", "STSong", "Noto Serif SC", "Noto Serif CJK SC", "SimSun", serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}

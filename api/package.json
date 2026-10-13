@@ -1,0 +1,18 @@
+{
+  "name": "sentence-api",
+  "version": "0.1.0",
+  "private": true,
+  "description": "长难句拆解台 · 后端（自用版）",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "import": "node scripts/import.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}
