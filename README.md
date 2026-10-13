@@ -75,7 +75,9 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 
 “关闭深度思考”默认开着：DeepSeek 等新模型默认会先“思考”再回答，批改和查词用不到，开着会慢很多、也更费钱。DeepSeek 推荐主力用 `deepseek-v4-pro`、轻量用 `deepseek-flash`。
 
-密钥加密后存在服务器的数据库里，页面上只显示打码后的样子。网页上保存的配置优先于 `.env`；在设置页点“改回使用服务器 .env 里的配置”可以撤销。
+每个平台的接口地址、密钥、模型和开关分开保存：点平台就能切换，点“保存并使用”就换成这个平台，不用重新填密钥；已经保存过密钥的平台旁边有个绿点。改了接口地址的域名时要重新填密钥，免得把一个平台的密钥发到别的地址。
+
+密钥加密后存在服务器的数据库里，页面上只显示打码后的样子。网页上保存的配置优先于 `.env`；在设置页点“改回使用服务器 .env 里的配置”可以撤销（各平台保存的配置还留着），也可以单独删除某个平台的配置。
 
 也可以继续用 `.env` 配置（写法见 `.env.example`），改完执行 `sudo docker compose up -d --force-recreate api`。注意：网页保存的密钥用 `COOKIE_SECRET` 加密，改了 `COOKIE_SECRET` 之后要在设置页重新填一次密钥。
 
@@ -94,7 +96,7 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 | POST | /api/grade | AI 批改 |
 | POST | /api/lookup | AI 查词（结果缓存在数据库） |
 | GET | /api/usage | 今天的 AI 用量和上限 |
-| GET / PUT / DELETE | /api/settings/llm | 读取、保存、清除网页上的模型配置（密钥只返回打码后的） |
+| GET / PUT / DELETE | /api/settings/llm | 读取各平台配置；保存某个平台并切换过去（`provider` 字段）；`?provider=` 删除某个平台，不带参数改回 .env（密钥只返回打码后的） |
 | POST | /api/settings/llm/test | 用填写的配置测试连接（不保存） |
 | POST | /api/settings/llm/models | 获取平台的模型列表 |
 | GET | /api/health | 健康检查 |

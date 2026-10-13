@@ -141,12 +141,16 @@ test('改了 COOKIE_SECRET 后提示密钥需要重填', async () => {
   app3.close();
 });
 
-test('恢复使用 .env 配置', async () => {
+test('改回使用 .env：不再用网页配置，但各平台保存的配置还在；单独删除某个平台', async () => {
   const r = await app.api('DELETE', '/api/settings/llm');
   assert.equal(r.status, 200);
   assert.equal(r.body.source, 'none');
+  assert.equal(r.body.providers.custom.saved, true, '保存的配置保留');
   assert.equal((await app.api('GET', '/api/usage')).body.aiReady, false);
+  const d = await app.api('DELETE', '/api/settings/llm?provider=custom');
+  assert.equal(d.body.providers.custom, undefined);
   assert.equal(db.raw("SELECT count(*) FROM settings").trim(), '0');
+  assert.equal((await app.api('DELETE', '/api/settings/llm?provider=nope')).status, 400);
 });
 
 test('.env 里有配置时显示来源为 .env，网页配置优先', async () => {
@@ -265,4 +269,78 @@ test('严格接口（不认识 thinking 参数）也能正常批改', async () =
   } finally {
     strict.close();
   }
+});
+
+// ---- 每个平台单独保存密钥 --------------------------------------------------------
+test('每个平台单独保存密钥和模型，切换平台不用重新填', async () => {
+  let r = await app.api('PUT', '/api/settings/llm', { provider: 'qwen', baseUrl: fake.url, apiKey: 'qwen-key-1111', mainModel: 'fake-main', lightModel: 'fake-light' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  r = await app.api('PUT', '/api/settings/llm', { provider: 'kimi', baseUrl: fake.url, apiKey: 'kimi-key-2222', mainModel: 'another', lightModel: '' });
+  assert.equal(r.body.provider, 'kimi');
+  assert.equal(r.body.providerName, 'Kimi');
+  assert.equal(r.body.providers.qwen.keyHint, 'qwen-…1111');
+  assert.equal(r.body.providers.kimi.keyHint, 'kimi-…2222');
+  assert.equal(r.body.providers.qwen.lightModel, 'fake-light');
+  await app.api('POST', '/api/grade', { sentenceId: 's-20261013-01', text: '一段译文' });
+  assert.equal(fake.calls.at(-1).auth, 'Bearer kimi-key-2222');
+  assert.equal(fake.calls.at(-1).data.model, 'another');
+
+  // 只传平台：用它保存的配置切换过去
+  r = await app.api('PUT', '/api/settings/llm', { provider: 'qwen' });
+  assert.equal(r.body.provider, 'qwen');
+  assert.equal(r.body.mainModel, 'fake-main');
+  await app.api('POST', '/api/grade', { sentenceId: 's-20261013-01', text: '另一段译文' });
+  assert.equal(fake.calls.at(-1).auth, 'Bearer qwen-key-1111');
+  assert.equal(r.body.providers.kimi.keyHint, 'kimi-…2222', '另一个平台的配置不受影响');
+});
+
+test('没存过密钥的平台不会借用别的平台的密钥', async () => {
+  const r = await app.api('PUT', '/api/settings/llm', { provider: 'glm', baseUrl: fake.url, mainModel: 'fake-main' });
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /智谱 GLM 的 API 密钥/);
+  const t = await app.api('POST', '/api/settings/llm/test', { provider: 'glm', baseUrl: fake.url, mainModel: 'fake-main' });
+  assert.equal(t.status, 400);
+  const m = await app.api('POST', '/api/settings/llm/models', { provider: 'glm', baseUrl: fake.url });
+  assert.equal(m.status, 400);
+  assert.equal(fake.calls.filter((c) => c.auth === 'Bearer qwen-key-1111' && c.path.endsWith('/models')).length, 0);
+});
+
+test('改了接口地址的域名时必须重新填密钥', async () => {
+  const other = 'http://localhost:9/v1';
+  for (const path of ['/api/settings/llm/test', '/api/settings/llm/models']) {
+    const r = await app.api('POST', path, { provider: 'qwen', baseUrl: other, mainModel: 'fake-main' });
+    assert.equal(r.status, 400, path);
+    assert.match(r.body.error, /接口地址换了/);
+  }
+  const s = await app.api('PUT', '/api/settings/llm', { provider: 'qwen', baseUrl: other, mainModel: 'fake-main' });
+  assert.equal(s.status, 400);
+  // 同一个地址只改模型：沿用密钥
+  const ok = await app.api('PUT', '/api/settings/llm', { provider: 'qwen', baseUrl: `${fake.url}/`, mainModel: 'another' });
+  assert.equal(ok.status, 200);
+  assert.equal(ok.body.providers.qwen.keyHint, 'qwen-…1111');
+});
+
+test('删除正在使用的平台后不再使用网页配置，其他平台还在', async () => {
+  const r = await app.api('DELETE', '/api/settings/llm?provider=qwen');
+  assert.equal(r.body.source, 'none');
+  assert.equal(r.body.providers.qwen, undefined);
+  assert.equal(r.body.providers.kimi.saved, true);
+  const back = await app.api('PUT', '/api/settings/llm', { provider: 'kimi' });
+  assert.equal(back.body.ready, true);
+});
+
+test('旧格式（只有一份配置）会按接口地址升级到对应平台', async () => {
+  await repo.putSetting('llm', { baseUrl: 'https://api.deepseek.com/v1', mainModel: 'deepseek-chat', lightModel: '', jsonMode: true, apiKeyEnc: encrypt('sk-old-key-123456', 'z'.repeat(64)), updatedAt: '2026-10-13T00:00:00.000Z' });
+  const cfg5 = loadConfig({ ACCESS_PASSWORD: 'pw-123', COOKIE_SECRET: 'z'.repeat(64) });
+  const app5 = await startApp(createApp(cfg5, { llm: createLlm(cfg5), log: quiet }));
+  await app5.api('POST', '/api/unlock', { password: 'pw-123' });
+  const v = (await app5.api('GET', '/api/settings/llm')).body;
+  assert.equal(v.source, 'page');
+  assert.equal(v.provider, 'deepseek');
+  assert.equal(v.providers.deepseek.keyHint, 'sk-…3456');
+  assert.equal(cfg5.llm.apiKey, 'sk-old-key-123456');
+  const raw = JSON.parse(db.raw("SELECT value::text FROM settings WHERE key = 'llm'"));
+  assert.equal(raw.v, 2);
+  assert.equal(raw.active, 'deepseek');
+  app5.close();
 });

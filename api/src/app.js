@@ -123,12 +123,15 @@ export function createApp(cfg, { llm = createLlm(cfg), settings = null, log = co
 
   router.add('PUT', '/api/settings/llm', async ({ req }) => ({ body: await settingsSvc.save(await readJson(req)) }));
 
-  router.add('DELETE', '/api/settings/llm', async () => ({ body: await settingsSvc.reset() }));
+  // ?provider=deepseek 删除这个平台的配置；不带参数表示改回使用 .env（各平台保存的配置保留）
+  router.add('DELETE', '/api/settings/llm', async ({ url }) => ({ body: await settingsSvc.reset(url.searchParams.get('provider') || null) }));
 
   // 用填写的配置（还没保存也可以）试着调用一次模型
   router.add('POST', '/api/settings/llm/test', async ({ req }) => {
     const c = settingsSvc.candidate(await readJson(req));
-    if (!c.baseUrl || !c.apiKey || !c.mainModel) throw new HttpError(400, '接口地址、API 密钥和主力模型都要填写');
+    if (!c.baseUrl) throw new HttpError(400, '请填写接口地址');
+    if (!c.apiKey) throw new HttpError(400, settingsSvc.keyError(c));
+    if (!c.mainModel) throw new HttpError(400, '请填写主力模型');
     const probe = createLlm({ llm: c });
     const results = [];
     for (const model of [...new Set([c.mainModel, c.lightModel])]) {
@@ -158,6 +161,7 @@ export function createApp(cfg, { llm = createLlm(cfg), settings = null, log = co
 
   router.add('POST', '/api/settings/llm/models', async ({ req }) => {
     const c = settingsSvc.candidate(await readJson(req));
+    if (c.baseUrl && !c.apiKey) throw new HttpError(400, settingsSvc.keyError(c));
     try {
       return { body: { models: await createLlm({ llm: c }).listModels() } };
     } catch (e) {

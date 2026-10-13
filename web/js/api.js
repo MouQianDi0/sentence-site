@@ -42,7 +42,8 @@ export const api = {
   usage: () => request('GET', '/api/usage'),
   llmSettings: () => request('GET', '/api/settings/llm'),
   saveLlmSettings: (body) => request('PUT', '/api/settings/llm', body),
-  resetLlmSettings: () => request('DELETE', '/api/settings/llm'),
+  // 传 provider 删除这个平台的配置；不传表示改回使用 .env
+  resetLlmSettings: (provider) => request('DELETE', `/api/settings/llm${provider ? `?provider=${encodeURIComponent(provider)}` : ''}`),
   testLlm: (body) => request('POST', '/api/settings/llm/test', body),
   listModels: (body) => request('POST', '/api/settings/llm/models', body),
 };
