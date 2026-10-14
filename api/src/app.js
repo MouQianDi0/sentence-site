@@ -77,6 +77,12 @@ export function createApp(cfg, { llm = createLlm(cfg), settings = null, practice
     return { body: { ok: true } };
   });
 
+  // 谓语标错了：自己按单词位置改（spans），或者让 AI 复查这一句
+  router.add('PUT', '/api/sentences/:id/predicates', async ({ req, params }) => ({
+    body: await ai.setMarks(params.id, (await readJson(req)).spans),
+  }));
+  router.add('POST', '/api/sentences/:id/review', async ({ params }) => ({ body: await ai.reviewOne(params.id) }));
+
   // kind=daily：生成（或补齐）今日任务；kind=extra（默认）：加练 count 句（1–10）。难度按“每日任务”设置
   router.add('POST', '/api/sentences/generate', async ({ req }) => {
     const body = await readJson(req);

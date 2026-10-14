@@ -33,6 +33,9 @@ export const api = {
   unlock: (password) => request('POST', '/api/unlock', { password }),
   sentences: (since) => request('GET', `/api/sentences${since ? `?since=${encodeURIComponent(since)}` : ''}`),
   deleteSentence: (id) => request('DELETE', `/api/sentences/${encodeURIComponent(id)}`),
+  // 谓语标错了：spans 按整句单词下标 [{kind:'main'|'sub', a, b}]；或者让 AI 复查这一句
+  fixPredicates: (id, spans) => request('PUT', `/api/sentences/${encodeURIComponent(id)}/predicates`, { spans }),
+  reviewSentence: (id) => request('POST', `/api/sentences/${encodeURIComponent(id)}/review`),
   // { kind: 'daily' } 生成或补齐今日任务；{ kind: 'extra', count } 加练
   generate: (body = {}) => request('POST', '/api/sentences/generate', body),
   practiceSettings: () => request('GET', '/api/settings/practice'),

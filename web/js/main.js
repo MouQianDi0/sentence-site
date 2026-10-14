@@ -85,6 +85,7 @@ let extraOpen = false; // 任务卡片里的“加练”展开
 let extraCount = 3;
 let celebrate = false; // 刚完成最后一句，完成页要放庆祝动画
 let deleteArmed = null;
+let fix = null; // 修正谓语标注：{ tag: 每个单词是 'main' | 'sub' | null, busy: ''|'save'|'ai', msg }
 let speaking = false;
 let lookupBusy = null;
 let lookupErr = null;
@@ -219,7 +220,7 @@ function renderSentence() {
   $('lvl').classList.toggle('hidden', !cur.level);
   $('lvl').textContent = cur.level;
   $('focus').textContent = cur.focus;
-  const dict = dictMode || step === 3;
+  const dict = (dictMode && !fix) || step === 3;
   $('dict').classList.toggle('hidden', step === 3);
   $('dict').setAttribute('aria-pressed', String(dictMode));
   const fw = flat(cur);
@@ -237,6 +238,17 @@ function renderSentence() {
       .join(' ');
     hint.classList.remove('hidden');
     hint.textContent = (cur.phrases || []).length ? '点单词看释义，虚线下划线是固定搭配。' : '点单词看释义。';
+  } else if (step === 1 && fix) {
+    hint.classList.add('hidden');
+    el.innerHTML = fw
+      .map((x, i) => {
+        const k = fix.tag[i];
+        let c = `${W_BASE} ${fix.busy ? 'cursor-default' : ''}`;
+        if (k === 'main') c += ' bg-ok-soft font-semibold text-ok shadow-[inset_0_0_0_2px_var(--ok)]';
+        else if (k === 'sub') c += ' text-ok shadow-[inset_0_0_0_2px_var(--ok)]';
+        return `${esc(x.lead)}<button class="${c}" data-fx="${i}" aria-label="${esc(x.core)}：${k === 'main' ? '主句谓语' : k === 'sub' ? '从句谓语' : '不是谓语'}">${esc(x.core)}</button>${esc(x.trail)}`;
+      })
+      .join(' ');
   } else if (step === 1) {
     hint.classList.add('hidden');
     const t = [];
@@ -434,7 +446,39 @@ function renderTabs() {
   ['tabs', 'nav', 'panel'].forEach((id) => $(id).classList.toggle('hidden', !cur));
 }
 
+/** 修正模式里标出的谓语：相邻、同一片段、中间没有标点的同类词连成一个 */
+function fixSpans() {
+  const fw = flat(cur);
+  const spans = [];
+  fix.tag.forEach((k, i) => {
+    if (!k) return;
+    const last = spans.at(-1);
+    if (last && last.kind === k && last.b === i - 1 && fw[i - 1].si === fw[i].si && !fw[i - 1].trail) last.b = i;
+    else spans.push({ kind: k, a: i, b: i });
+  });
+  return spans.map((sp) => ({ ...sp, text: fw.slice(sp.a, sp.b + 1).map((x) => x.core).join(' ') }));
+}
+
+function fixHTML() {
+  const spans = fixSpans();
+  const mains = spans.filter((x) => x.kind === 'main');
+  const subs = spans.filter((x) => x.kind === 'sub');
+  const ready = mains.length === 1;
+  const list = (arr) => (arr.length ? arr.map((x) => `<b>${esc(x.text)}</b>`).join('、') : '无');
+  return `<div class="flex flex-col gap-2 rounded-xl border-[1.5px] border-accent bg-sheet px-3.5 py-3 text-[14.5px]">
+      <strong class="text-[15.5px]">修正这题的答案</strong>
+      <span>在上面的句子里点词：点一下是<b>从句谓语</b>，再点是<b>主句谓语</b>（绿底），再点取消。相邻的词会连成一个，如 had failed。</span>
+      <span class="text-[14px]">主句谓语：${list(mains)}；从句谓语：${list(subs)}</span>
+      <span class="text-[13px] ${ready ? 'text-muted' : 'text-bad'}">${ready ? `本句 ${spans.length} 个谓语，${spans.length - 1} 个从句。` : '主句谓语要标且只标一处。'}</span>
+      ${fix.msg ? `<span class="text-[13.5px] text-bad">${esc(fix.msg)}</span>` : ''}</div>
+    <div class="${C.row}">
+      <button class="${C.btnPrimary}" data-act="fixSave" ${ready && !fix.busy ? '' : 'disabled'}>${fix.busy === 'save' ? '保存中…' : '保存修改'}</button>
+      <button class="${C.btn}" data-act="fixAi" ${aiOk() && !fix.busy ? '' : 'disabled'}>${fix.busy === 'ai' ? `<span class="inline-flex items-center gap-2"><span class="${C.spin}"></span>AI 复查中…</span>` : '让 AI 复查'}</button>
+      <button class="${C.btn}" data-act="fixCancel" ${fix.busy ? 'disabled' : ''}>取消</button></div>`;
+}
+
 function step1HTML() {
+  if (fix) return fixHTML();
   const t = [];
   cur.segs.forEach((g) => toks(g.t).forEach((x) => t.push(x)));
   let res = '';
@@ -457,7 +501,7 @@ function step1HTML() {
         <span>主句谓语是 <b>${esc(mainV)}</b>（绿底），其余圈出的是从句里的谓语。条纹表示漏选，划线表示它不是谓语。</span>
         <span class="text-muted">规律：本句有 ${total} 个谓语，就说明有 ${total - 1} 个从句。</span>
         ${cur.trap ? `<span class="text-[14px]"><span class="font-mono text-[11px] font-medium tracking-[.08em] text-bad">陷阱 </span>${esc(cur.trap)}</span>` : ''}</div>
-      <div class="${C.row}"><button class="${C.btnPrimary}" data-go="2">下一步：看结构</button><button class="${C.btn}" data-act="reset">再做一次</button></div>`;
+      <div class="${C.row}"><button class="${C.btnPrimary}" data-go="2">下一步：看结构</button><button class="${C.btn}" data-act="reset">再做一次</button><button class="${C.btn}" data-act="fix">这题有误</button></div>`;
   }
   return `<p class="m-0">点出句子里<b>所有谓语动词</b>，包括从句里的。<small class="mt-0.5 block text-[13px] text-muted">短语算一个整体，例如 was published。</small></p>
     <details class="${C.card} px-3.5 py-2.5 text-[14px]"><summary class="cursor-pointer font-semibold text-accent">知识点：谓语和非谓语怎么区分</summary>
@@ -736,6 +780,7 @@ function open(id, { keepView = false } = {}) {
   freshFb = false;
   freshAnswer = false;
   disarmDelete();
+  fix = null;
   roleOn = { main: 1, attr: 1, noun: 1, adv: 1, nonfin: 1 };
   optOrder = shuffle(s.opts.length);
   const c = rec(s.id)?.choice;
@@ -749,6 +794,7 @@ function setStep(n) {
   if (speaking) stopSpeak();
   step = n;
   wordSel = null;
+  fix = null;
   if (n === 2) sweepPending = true;
   renderTabs();
   renderSentence();
@@ -775,6 +821,35 @@ function pickInitial() {
   if (t.complete) {
     showDone = true;
     renderDone(false);
+  }
+}
+
+// ---------- 修正谓语标注 ----------
+async function saveFix(useAi) {
+  if (!cur || !fix || fix.busy) return;
+  const id = cur.id;
+  fix.busy = useAi ? 'ai' : 'save';
+  fix.msg = '';
+  renderPanel(false);
+  try {
+    const r = useAi ? await api.reviewSentence(id) : await api.fixPredicates(id, fixSpans().map(({ kind, a, b }) => ({ kind, a, b })));
+    const i = sentences.findIndex((x) => x.id === id);
+    if (i >= 0) sentences[i] = r.sentence;
+    if (cur?.id !== id) return;
+    cur = r.sentence;
+    fix = null;
+    picked = new Set();
+    checked = false;
+    renderSentence();
+    renderPanel(true);
+    if (useAi) toast(r.changed ? `AI 改正了答案${r.note ? `：${r.note}` : ''}，再做一次吧` : `AI 认为原答案没问题${r.note ? `：${r.note}` : ''}`);
+    else toast('答案已修改，再做一次吧');
+  } catch (e) {
+    if (fix && cur?.id === id) {
+      fix.busy = '';
+      fix.msg = e.message;
+      renderPanel(false);
+    } else toast(e.message);
   }
 }
 
@@ -1184,6 +1259,25 @@ $('sentence').addEventListener('click', (e) => {
     if (wordSel != null && speech.TTS && !speaking) sayText(flat(cur)[i].core);
     return;
   }
+  const fx = e.target.closest('[data-fx]');
+  if (fx && fix && !fix.busy) {
+    const i = +fx.dataset.fx;
+    const k = fix.tag[i];
+    if (k === 'main') fix.tag[i] = null;
+    else if (k === 'sub') {
+      // 主句谓语只有一处：把别处的主句谓语改成从句谓语
+      fix.tag = fix.tag.map((x) => (x === 'main' ? 'sub' : x));
+      fix.tag[i] = 'main';
+      const spans = fixSpans();
+      const sp = spans.find((x) => x.a <= i && i <= x.b);
+      // 同一个短语里的其他词跟着变成主句谓语
+      for (let j = sp ? sp.a : i; j <= (sp ? sp.b : i); j++) fix.tag[j] = 'main';
+    } else fix.tag[i] = 'sub';
+    fix.msg = '';
+    renderSentence();
+    renderPanel(false);
+    return;
+  }
   const t = e.target.closest('[data-t]');
   if (t && step === 1 && !checked) {
     const i = +t.dataset.t;
@@ -1299,6 +1393,19 @@ $('panel').addEventListener('click', (e) => {
     case 'clear':
       picked.clear();
       break;
+    case 'fix':
+      wordSel = null;
+      fix = { tag: flat(cur).map((x) => x.k), busy: '', msg: '' };
+      renderSentence();
+      renderPanel(true);
+      return;
+    case 'fixCancel':
+      fix = null;
+      break;
+    case 'fixSave':
+    case 'fixAi':
+      saveFix(a.dataset.act === 'fixAi');
+      return;
     case 'reset':
       picked.clear();
       checked = false;

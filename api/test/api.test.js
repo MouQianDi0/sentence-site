@@ -327,8 +327,10 @@ test('加练：四六级混合，超过 5 句分两次请求，句子打乱顺�
   const r = await app.api('POST', '/api/sentences/generate', { kind: 'extra', count: 7 });
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.added.length, 7);
-  const prompts = llmServer.calls.slice(before).map((c) => c.prompt);
+  const calls = llmServer.calls.slice(before).map((c) => c.prompt);
+  const prompts = calls.filter((p) => !p.includes('核对下面句子'));
   assert.equal(prompts.length, 2);
+  assert.equal(calls.length - prompts.length, 2, '每批出题后各复核一次');
   assert.match(prompts[0], /按顺序出：第 1 句 CET-[46](，第 \d 句 CET-[46]){4}。/);
   const all = (await app.api('GET', '/api/sentences')).body.sentences;
   const added = all.filter((s) => r.body.added.includes(s.id));
@@ -382,4 +384,67 @@ test('编号被占用时顺延：删掉一句今日任务后补齐，同一秒�
   assert.equal(a.status, 200);
   assert.equal(b.status, 200);
   assert.equal(new Set([...a.body.added, ...b.body.added]).size, 4);
+});
+
+// ---- 谓语标注：规则校验、AI 复核、做题时修正 ---------------------------------
+const professor = (marks, trap = '从句中 conducted 是过去分词作定语，不是谓语。') => sentenceFor(0, {
+  segs: [
+    { r: 'main', t: 'The professor *explained*', n: '主句主语和谓语。', k: 'main' },
+    { r: 'noun', t: marks, n: '宾语从句。', k: 'noun_obj' },
+  ],
+  trap,
+});
+
+test('规则校验：引导词、陷阱里说不是谓语的词被标成谓语时不通过', async () => {
+  const { checkSentence } = await import('../src/validate.js');
+  const bad1 = checkSentence(professor('^that^ the experiment, conducted last week, ^had failed^ due to a simple error in measuring the temperature.'), { strict: true });
+  assert.match(bad1.reason, /that/);
+  const bad2 = checkSentence(professor('that the experiment, ^conducted^ last week, ^had failed^ due to a simple error in measuring the temperature.'), { strict: true });
+  assert.match(bad2.reason, /陷阱/);
+  const good = checkSentence(professor('that the experiment, conducted last week, ^had failed^ due to a simple error in measuring the temperature.'), { strict: true });
+  assert.ok(good.ok, good.reason);
+});
+
+test('出题：复核发现标错时按复核结果改正，对不上的句子丢掉', async () => {
+  const subtle = (i) => professor(`that the study, ^conducted^ by team ${i} last week, ^had failed^ because of a simple error in measuring the room temperature.`, '');
+  await app.api('PUT', '/api/settings/practice', { levels: ['CET-4'] });
+  generateReplyGetter = () => ({ sentences: [subtle(1), subtle(2)] });
+  llmServer.handlers.review = () => ({ items: [
+    { i: 1, main: 'explained', sub: ['had failed'], changed: true, note: 'conducted 是分词作定语' },
+    { i: 2, main: 'explained', sub: ['was broken'], changed: true, note: '' },
+  ] });
+  try {
+    const ids = await ai.generate({ source: 'extra', n: 1, levels: ['CET-4'] });
+    assert.equal(ids.length, 1);
+    const s = await repo.getSentence(ids[0]);
+    assert.equal(s.segs[1].t, 'that the study, conducted by team 1 last week, ^had failed^ because of a simple error in measuring the room temperature.');
+  } finally {
+    delete llmServer.handlers.review;
+  }
+});
+
+test('做题时修正：按单词位置改谓语，或让 AI 复查这一句', async () => {
+  const s = { ...professor('^that^ the experiment, ^conducted^ last week, ^had failed^ due to a simple error in measuring the temperature.'), id: 'fix-1', created: new Date().toISOString(), batch: '2026-10-14', source: 'extra' };
+  await repo.insertSentence(s);
+  // 单词下标：0 The 1 professor 2 explained 3 that 4 the 5 experiment, 6 conducted 7 last 8 week, 9 had 10 failed
+  let r = await app.api('PUT', '/api/sentences/fix-1/predicates', { spans: [{ kind: 'main', a: 2, b: 2 }, { kind: 'sub', a: 9, b: 10 }] });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.sentence.segs[1].t, 'that the experiment, conducted last week, ^had failed^ due to a simple error in measuring the temperature.');
+  assert.equal((await app.api('PUT', '/api/sentences/fix-1/predicates', { spans: [{ kind: 'sub', a: 9, b: 10 }] })).status, 400, '没有主句谓语');
+  assert.equal((await app.api('PUT', '/api/sentences/fix-1/predicates', { spans: [{ kind: 'main', a: 1, b: 3 }] })).status, 400, '跨片段');
+
+  await repo.updateSegs('fix-1', s.segs);
+  llmServer.handlers.review = () => ({ items: [{ i: 1, main: 'explained', sub: ['had failed'], changed: true, note: 'that 是连接词' }] });
+  try {
+    r = await app.api('POST', '/api/sentences/fix-1/review');
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.changed, true);
+    assert.equal(r.body.sentence.segs[1].t, 'that the experiment, conducted last week, ^had failed^ due to a simple error in measuring the temperature.');
+    r = await app.api('POST', '/api/sentences/fix-1/review');
+    assert.equal(r.body.changed, false, '已经对了就不再改');
+    llmServer.handlers.review = () => ({ items: [{ i: 1, main: 'explains', sub: [] }] });
+    assert.equal((await app.api('POST', '/api/sentences/fix-1/review')).status, 502);
+  } finally {
+    delete llmServer.handlers.review;
+  }
 });

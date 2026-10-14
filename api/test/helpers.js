@@ -77,8 +77,10 @@ export function startFakeLlm(handlers) {
       const data = JSON.parse(body);
       const prompt = data.messages.at(-1).content;
       calls.push({ path: req.url, auth: req.headers.authorization, data, prompt });
-      const kind = prompt.includes('<student_translation>') ? 'grade' : prompt.includes('解释英文单词') ? 'lookup' : prompt.includes('连接测试') ? 'ping' : 'generate';
+      const kind = prompt.includes('<student_translation>') ? 'grade' : prompt.includes('解释英文单词') ? 'lookup' : prompt.includes('连接测试') ? 'ping' : prompt.includes('核对下面句子') ? 'review' : 'generate';
       if (kind === 'ping' && !handlers.ping) handlers.ping = () => ({ ok: true });
+      // 没指定时，复核一律回复“没有意见”，句子保持原样
+      if (kind === 'review' && !handlers.review) handlers.review = () => ({ items: [] });
       // 模拟不认识 thinking 参数的严格接口
       if (handlers.strict && ('thinking' in data || 'enable_thinking' in data)) {
         res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -108,7 +110,7 @@ export function startFakeLlm(handlers) {
   });
   return new Promise((resolve) => {
     server.listen(0, '127.0.0.1', () => {
-      resolve({ url: `http://127.0.0.1:${server.address().port}/v1`, calls, close: () => server.close() });
+      resolve({ url: `http://127.0.0.1:${server.address().port}/v1`, calls, handlers, close: () => server.close() });
     });
   });
 }

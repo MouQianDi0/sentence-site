@@ -1,4 +1,5 @@
 // 句子数据的校验与整理。导入旧数据用宽松模式，AI 新出的句子用严格模式。
+import { predicateProblem } from './predicates.js';
 export const ROLES = ['main', 'attr', 'noun', 'adv', 'nonfin'];
 export const KB_KEYS = [
   'main', 'it_formal', 'notbut', 'comparison',
@@ -39,6 +40,10 @@ export function checkSentence(o, { strict = false } = {}) {
   const mainMarks = segs.reduce((n, g) => n + (g.t.match(/\*[^*]+\*/g) || []).length, 0);
   if (mainMarks < 1) return { ok: false, reason: '没有标出主句谓语' };
   if (strict && mainMarks !== 1) return { ok: false, reason: '主句谓语标了不止一处' };
+  if (strict) {
+    const bad = predicateProblem(segs, o.trap);
+    if (bad) return { ok: false, reason: bad };
+  }
 
   const opts = (Array.isArray(o.opts) ? o.opts : [])
     .map((x) => ({ t: S(x?.t, 400), ok: Boolean(x?.ok), why: S(x?.why, 120) }))

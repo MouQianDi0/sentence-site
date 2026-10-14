@@ -2,7 +2,8 @@
 import * as repo from './repo.js';
 import { HttpError } from './http.js';
 import { LlmError } from './llm.js';
-import { gradePrompt, lookupPrompt, generatePrompt } from './prompts.js';
+import { gradePrompt, lookupPrompt, generatePrompt, reviewPrompt } from './prompts.js';
+import { extractMarks, locate, markByIndex } from './predicates.js';
 import { checkSentence } from './validate.js';
 import { shanghaiDate, shanghaiClock } from './time.js';
 import { LEVELS, planLevels } from './practice.js';
@@ -47,7 +48,66 @@ export function cleanFeedback(data, text) {
   };
 }
 
+const markKey = (segs) => extractMarks(segs).map((m) => `${m.kind}:${m.a}-${m.b}`).join(',');
+
 export function createAi({ cfg, llm, log = console }) {
+  /**
+   * 让 AI 复核一批句子的谓语标注。返回和 items 一样长的数组，每项：
+   * {status:'ok', segs, changed, note}；{status:'unknown'}（回复里没有这一句）；{status:'mismatch'}（给的谓语在原句里找不到）
+   */
+  async function reviewMarks(items) {
+    const r = await llm.chatJson({
+      prompt: reviewPrompt(items),
+      model: cfg.llm.mainModel,
+      maxTokens: 400 + 250 * items.length,
+      temperature: 0.1,
+      timeoutMs: Math.max(cfg.llm.timeoutMs, 90_000),
+    });
+    const list = Array.isArray(r.data) ? r.data : Array.isArray(r.data?.items) ? r.data.items : [];
+    return items.map((s, i) => {
+      const it = list.find((x) => Number(x?.i) === i + 1);
+      if (!it || !it.main) return { status: 'unknown' };
+      const spans = locate(s.segs, it.main, Array.isArray(it.sub) ? it.sub : []);
+      if (!spans) return { status: 'mismatch' };
+      const segs = markByIndex(s.segs, spans);
+      const changed = markKey(segs) !== markKey(s.segs);
+      return { status: 'ok', segs: changed ? segs : s.segs, changed, note: str(it.note, 60) };
+    });
+  }
+
+  /** 做题时发现标错了：让 AI 单独复查这一句，标注有变就存回去 */
+  async function reviewOne(id) {
+    const sentence = await repo.getSentence(String(id || ''));
+    if (!sentence) throw new HttpError(404, '句子不存在');
+    let res;
+    try {
+      [res] = await reviewMarks([sentence]);
+    } catch (e) {
+      throw toHttpError(e);
+    }
+    if (res.status !== 'ok') throw new HttpError(502, 'AI 复查的结果对不上原句，再试一次，或者自己点词修改');
+    if (!res.changed) return { sentence, changed: false, note: res.note };
+    await repo.updateSegs(sentence.id, res.segs);
+    return { sentence: await repo.getSentence(sentence.id), changed: true, note: res.note };
+  }
+
+  /** 自己改谓语：spans 是按整句单词下标标出的 [{kind, a, b}] */
+  async function setMarks(id, spans) {
+    const sentence = await repo.getSentence(String(id || ''));
+    if (!sentence) throw new HttpError(404, '句子不存在');
+    if (!Array.isArray(spans) || spans.filter((x) => x?.kind === 'main').length !== 1) {
+      throw new HttpError(400, '要标出且只标出一个主句谓语');
+    }
+    let segs;
+    try {
+      segs = markByIndex(sentence.segs, spans);
+    } catch (e) {
+      throw new HttpError(400, e.message);
+    }
+    await repo.updateSegs(sentence.id, segs);
+    return { sentence: await repo.getSentence(sentence.id) };
+  }
+
   async function checkLimit(field, limit, message) {
     const usage = await repo.getUsage(shanghaiDate());
     if (usage[field] >= limit) throw new HttpError(429, message.replace('{n}', limit));
@@ -165,27 +225,50 @@ export function createAi({ cfg, llm, log = console }) {
             temperature: 0.8,
             timeoutMs: Math.max(cfg.llm.timeoutMs, 180_000),
           });
-          const list = Array.isArray(r.data) ? r.data : r.data?.sentences;
-          return { list: Array.isArray(list) ? list : [] };
+          const raw = Array.isArray(r.data) ? r.data : r.data?.sentences;
+          return { list: await vet(Array.isArray(raw) ? raw : []) };
         } catch (e) {
           return { error: e };
         }
       };
+      // 先按规则校验，再让 AI 复核谓语标注：标错的按复核结果改正，改完再校验一遍；复核本身出错时保留规则校验通过的句子
+      const vet = async (raw) => {
+        const list = [];
+        for (const item of raw) {
+          const checked = checkSentence(item, { strict: true });
+          if (checked.ok) list.push(checked.value);
+          else reasons.push(checked.reason);
+        }
+        if (!list.length) return list;
+        let reviews;
+        try {
+          reviews = await reviewMarks(list);
+        } catch (e) {
+          reasons.push(`谓语复核没做成：${e.message}`);
+          return list;
+        }
+        const out = [];
+        list.forEach((s, i) => {
+          const rv = reviews[i];
+          if (rv.status === 'mismatch') return reasons.push('复核给出的谓语在原句里找不到');
+          if (rv.status !== 'ok' || !rv.changed) return out.push(s);
+          const again = checkSentence({ ...s, segs: rv.segs }, { strict: true });
+          if (!again.ok) return reasons.push(`复核改正后仍不合格：${again.reason}`);
+          log.warn?.(`[ai] 复核改正了谓语标注：${rv.note || markKey(s.segs)}`);
+          out.push(again.value);
+        });
+        return out;
+      };
       const take = (list) => {
         for (const item of list) {
           if (accepted.length >= n) break;
-          const checked = checkSentence(item, { strict: true });
-          if (!checked.ok) {
-            reasons.push(checked.reason);
-            continue;
-          }
-          const level = normLevel(checked.value.level);
+          const level = normLevel(item.level);
           if (!need[level]) {
-            reasons.push(`难度 ${checked.value.level || '未标注'} 不是这次要的`);
+            reasons.push(`难度 ${item.level || '未标注'} 不是这次要的`);
             continue;
           }
           need[level] -= 1;
-          accepted.push({ ...checked.value, level });
+          accepted.push({ ...item, level });
         }
       };
 
@@ -242,5 +325,5 @@ export function createAi({ cfg, llm, log = console }) {
     }
   }
 
-  return { grade, lookup, generate };
+  return { grade, lookup, generate, reviewOne, setMarks };
 }

@@ -1,5 +1,6 @@
 // 提示词：沿用 Claude 页面版里已经跑通的写法，改成适配国内模型的 JSON 对象输出。
 import { KB_KEYS, plainText } from './validate.js';
+import { extractMarks } from './predicates.js';
 
 export function gradePrompt(sentence, text) {
   return `你是大学英语四六级翻译阅卷老师，请批改学生把英文长难句译成中文的译文。
@@ -34,7 +35,7 @@ const GEN_SPEC = `只回复一个 JSON 对象：{"sentences":[句子1, 句子2, 
 
 segs 规则（非常重要）：
 1. 按原句顺序把整句切成连续片段；所有片段的 t 去掉标记后用空格连起来，必须正好等于原句（含标点）。每个从句的引导词放在该从句片段的开头。
-2. 主句谓语（含助动词、情态动词、否定词，如 has been criticized、cannot provide）用 *…* 包起来，整句只标这一处；每个从句的谓语用 ^…^ 包起来。不定式、动名词、作定语或状语的分词都不是谓语，不要标。标记后的标点放在标记外，如 ^cannot provide^,
+2. 主句谓语（含助动词、情态动词、否定词，如 has been criticized、cannot provide）用 *…* 包起来，整句只标这一处；每个从句的谓语用 ^…^ 包起来。引导词（that、which、who、when、whether 等）不是谓语，不要标；不定式、动名词、作定语或状语的分词（如 the experiment conducted last week 里的 conducted）都不是谓语，不要标。trap 里说“不是谓语”的词，绝不能再标成谓语。标记后的标点放在标记外，如 ^cannot provide^,
 3. r 只能是 main（主句的主语、谓语、宾语、表语及主句内的短语）、attr（定语从句）、noun（名词性从句）、adv（状语从句或状语短语）、nonfin（非谓语短语）。
 4. k 只能取：${KB_KEYS.join(', ')}。
 示例片段：[{"r":"main","t":"The new policy,","n":"主语。","k":"main"},{"r":"nonfin","t":"designed to reduce traffic,","n":"过去分词短语作后置定语，修饰 policy。","k":"nf_pp"},{"r":"main","t":"*has been criticized*","n":"主句谓语，现在完成时的被动语态。","k":"main"}]
@@ -65,4 +66,25 @@ ${levels.map((l) => `- ${LEVEL_SPEC[l]}`).join('\n')}
 ${list}
 
 ${GEN_SPEC}`;
+}
+
+/** 复核谓语标注。items：[{segs, trap}]；回复里 i 从 1 开始 */
+export function reviewPrompt(items) {
+  const list = items
+    .map((s, i) => {
+      const marks = extractMarks(s.segs);
+      const main = marks.filter((m) => m.kind === 'main').map((m) => m.text).join('、') || '（无）';
+      const sub = marks.filter((m) => m.kind === 'sub').map((m) => m.text).join('、') || '（无）';
+      return `${i + 1}. ${plainText(s.segs)}\n   当前标注：主句谓语 ${main}；从句谓语 ${sub}`;
+    })
+    .join('\n');
+  return `你是英语语法老师，请逐句核对下面句子里“谓语动词”的标注是否正确，标错的给出正确答案。
+谓语：有时态、和主语搭配的限定动词，连同它的助动词、情态动词、否定词算一个整体，如 has been criticized、cannot provide、did not know。
+不是谓语：引导词（that、which、who、when、whether 等）；不定式 to do；动名词和现在分词 doing；前面没有 be / have 的过去分词（如 the experiment conducted last week 里的 conducted）；形容词。
+每个主句、每个从句各有一个谓语。主句谓语只有一个。
+
+${list}
+
+只回复一个 JSON 对象：{"items":[{"i":1,"main":"主句谓语","sub":["从句谓语", "..."],"changed":false,"note":"改了什么，30字内，没改给空字符串"}]}
+每个句子都要给出一项。main 和 sub 里的文字必须一字不差摘自原句，sub 按在句中出现的顺序列出，没有从句谓语就给空数组。`;
 }

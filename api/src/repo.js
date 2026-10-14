@@ -76,6 +76,12 @@ export async function insertSentence(s) {
   return rows.length > 0;
 }
 
+/** 只改谓语标注（segs）；返回是否找到这句 */
+export async function updateSegs(id, segs) {
+  const { rowCount } = await query('UPDATE sentences SET segs = $2::jsonb WHERE id = $1', [id, json(segs)]);
+  return rowCount > 0;
+}
+
 export async function deleteSentence(id) {
   const { rowCount } = await query('DELETE FROM sentences WHERE id = $1', [id]);
   return rowCount > 0;
