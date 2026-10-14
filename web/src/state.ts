@@ -9,11 +9,13 @@ import type {
   Usage,
 } from '@sentence-site/shared';
 import { ls } from './lib/storage.ts';
+import { parseRoute } from './router.ts';
 
 export type ViewName = 'practice' | 'records' | 'settings';
 
 /** 记在本机的界面设置 */
 export interface UiPrefs {
+  /** 上次停在哪一页（直接打开首页 / 时回到这一页） */
   view?: ViewName;
   /** 上次练到的句子 */
   cur?: string;
@@ -54,7 +56,8 @@ export const state = {
   ui,
   /** 查词缓存：`单词|句子 id` -> 释义 */
   dictCache: (ls.get<Record<string, DictEntry>>(LS_DICT, {}) || {}) as Record<string, DictEntry>,
-  view: (ui.view === 'records' || ui.view === 'settings' ? ui.view : 'practice') as ViewName,
+  /** 现在显示哪一页：地址说了算（/practice、/records、/settings），首页 / 回到上次那一页 */
+  view: (parseRoute()?.view ?? (ui.view === 'records' || ui.view === 'settings' ? ui.view : 'practice')) as ViewName,
   loaded: false,
   /** 当前登录的账户 */
   me: null as Me | null,

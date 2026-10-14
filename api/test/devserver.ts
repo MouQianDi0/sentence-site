@@ -115,7 +115,8 @@ http
     const url = req.url || '/';
     if (url.startsWith('/api/')) return handle(req, res);
     const rel = decodeURIComponent(new URL(url, 'http://x').pathname);
-    const file = path.join(WEB, path.normalize(rel === '/' ? 'index.html' : rel));
+    // 页面地址（/practice、/records、/settings/invites……）都返回 index.html，和 nginx/default.conf 的 try_files 一样
+    const file = path.join(WEB, path.normalize(path.extname(rel) ? rel : 'index.html'));
     if (!file.startsWith(WEB)) {
       res.writeHead(404);
       res.end('not found');

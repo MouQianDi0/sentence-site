@@ -39,11 +39,6 @@ api
       return;
     }
     state.me = { role: s.role, name: s.name };
-    // 地址带着 #invites（在邀请码页上刷新）：你自己就回到邀请码页，别的账户去掉它
-    if (location.hash === '#invites') {
-      if (s.role === 'owner') state.view = 'settings';
-      else history.replaceState(null, '', location.pathname + location.search);
-    }
     void start();
   })
   .catch((e: Error) => {

@@ -45,7 +45,7 @@ cd /opt/sentence-site && sudo docker compose up -d --build
 
 ## 访问
 
-开了 HTTPS 以后打开 `https://服务器IP:8443`（还没开时是 `http://服务器IP:端口`，端口是 `.env` 里的 `WEB_PORT`），输入访问密码。忘了密码可以看：
+开了 HTTPS 以后打开 `https://服务器IP:8443`（还没开时是 `http://服务器IP:端口`，端口是 `.env` 里的 `WEB_PORT`），输入访问密码。练习、记录、设置各有自己的地址：`/practice`、`/records`、`/settings`（邀请码管理是 `/settings/invites`），刷新或收藏都会停在那一页；直接打开首页会回到上次停留的那一页。忘了密码可以看：
 
 ```bash
 sudo grep ACCESS_PASSWORD /opt/sentence-site/.env

@@ -100,6 +100,10 @@ jobs:
         run: |
           html=$(curl -fsS http://127.0.0.1:8080/)
           echo "$html" | grep -q '长难句拆解台'
+          # 练习、记录、设置、邀请码管理各有地址，直接打开（刷新）也是这个页面
+          for p in /practice /records /settings /settings/invites; do
+            curl -fsS "http://127.0.0.1:8080$p" | grep -q '长难句拆解台'
+          done
           asset=$(echo "$html" | grep -o '/assets/[^"]*\.js' | head -n 1)
           curl -fsS -o /dev/null "http://127.0.0.1:8080${asset}"
           curl -fsSI "http://127.0.0.1:8080${asset}" | grep -qi 'immutable'

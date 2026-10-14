@@ -1,7 +1,7 @@
 // “设置”页：每日任务、邀请码入口（只有你自己）、模型设置、账户。
 // 第一次进入时几块的数据一起读好再一起显示、只播一次进场动画；之后再进入先显示上次读到的，
 // 后台读到新数据再悄悄更新（不再播动画），所以不会一块一块地闪出来。
-// 邀请码管理是从设置页点进去的单独页面，地址带 #invites，手机的返回手势能回到设置主页。
+// 邀请码管理是从设置页点进去的单独页面，地址是 /settings/invites，手机的返回手势能回到设置主页。
 import { api } from '../lib/api.ts';
 import * as A from '../lib/anim.ts';
 import { $, closest } from '../lib/dom.ts';
@@ -10,7 +10,7 @@ import { toast } from '../lib/toast.ts';
 import { state } from '../state.ts';
 import { renderPanel } from '../practice/panel.ts';
 import { renderTask } from '../practice/task.ts';
-import { showView } from '../views.ts';
+import { PATHS, INVITES_PATH, atInvites, pushPath, replacePath, setTitle } from '../router.ts';
 import { createSettingsView } from './llm-settings.ts';
 import { createTaskSettings } from './task-settings.ts';
 import { createInvites, inviteEntryHTML, accountHTML } from './invites.ts';
@@ -23,7 +23,7 @@ let llmView: ReturnType<typeof createSettingsView>;
 
 let seq = 0;
 let invitesShown = false; // 正在看邀请码管理页
-let invitesPushed = false; // 打开邀请码页时往浏览器历史里加了一条（手机上的返回手势能回到设置主页）
+let invitesPushed = false; // 从设置主页点进邀请码页时加了一条历史记录（手机上的返回手势能回到设置主页）
 
 /** 现在是不是在邀请码管理页 */
 export const invitesOpen = (): boolean => invitesShown;
@@ -61,7 +61,9 @@ export async function openSettings(): Promise<void> {
   // 邀请码管理只有你自己（访问密码登录）看得到；模型设置每个账户都有，各填各的
   const parts = [taskSettings, llmView, ...(isOwner() ? [invitesView] : [])];
   const cached = parts.every((p) => p.hasData());
-  const wantInvites = isOwner() && (invitesShown || location.hash === '#invites');
+  const wantInvites = isOwner() && (invitesShown || atInvites());
+  // 邀请码管理页只有你自己能看，别的账户打开这个地址时换成设置页
+  if (!isOwner() && atInvites()) replacePath(PATHS.settings);
   showSettingsPage(wantInvites ? 'invites' : 'main');
   if (cached) {
     renderSettingsMain(!wantInvites);
@@ -90,6 +92,7 @@ export async function openSettings(): Promise<void> {
 /** 设置页里切换“主页 / 邀请码管理页” */
 function showSettingsPage(page: 'main' | 'invites'): void {
   invitesShown = page === 'invites';
+  setTitle('settings', invitesShown);
   $('settingsMain').classList.toggle('hidden', invitesShown);
   $('settingsMain').classList.toggle('flex', !invitesShown);
   $('settingsInvites').classList.toggle('hidden', !invitesShown);
@@ -98,8 +101,8 @@ function showSettingsPage(page: 'main' | 'invites'): void {
 
 function openInvites(): void {
   if (!isOwner()) return;
-  if (location.hash !== '#invites') {
-    history.pushState({ page: 'invites' }, '', '#invites');
+  if (!atInvites()) {
+    pushPath(INVITES_PATH);
     invitesPushed = true;
   }
   showSettingsPage('invites');
@@ -112,15 +115,13 @@ function openInvites(): void {
   });
 }
 
-const plainUrl = () => location.pathname + location.search;
-
-/** 邀请码页上点“← 设置”：有自己加的历史记录就退回去（和手机返回手势一样），否则直接切回 */
+/** 邀请码页上点“← 设置”：是从设置主页点进来的就退回去（和手机返回手势一样），否则直接换成设置主页 */
 export function closeInvites(): void {
-  if (invitesPushed && location.hash === '#invites') {
+  if (invitesPushed && atInvites()) {
     history.back();
     return;
   }
-  history.replaceState(null, '', plainUrl());
+  replacePath(PATHS.settings);
   backToSettingsMain();
 }
 
@@ -132,14 +133,26 @@ function backToSettingsMain(): void {
   window.scrollTo({ top: 0 });
 }
 
-/** 切到别的页（练习、记录）时离开邀请码页，去掉地址栏里的 #invites */
+/** 切到别的页（练习、记录）时离开邀请码页（地址由换页的地方改） */
 export function leaveInvites(): void {
-  if (!invitesShown && location.hash !== '#invites') return;
+  if (!invitesShown) return;
   invitesShown = false;
   invitesPushed = false;
   invitesView.reset();
   showSettingsPage('main');
-  if (location.hash === '#invites') history.replaceState(null, '', plainUrl());
+}
+
+/** 浏览器前进、后退到 /settings 或 /settings/invites 时，设置页里跟着换 */
+export function syncInvites(want: boolean): void {
+  if (want && !isOwner()) {
+    replacePath(PATHS.settings);
+    want = false;
+  }
+  if (want && !invitesShown) {
+    showSettingsPage('invites');
+    invitesView.render(true);
+    window.scrollTo({ top: 0 });
+  } else if (!want && invitesShown) backToSettingsMain();
 }
 
 /** 退出登录前再问一次 */
@@ -159,7 +172,7 @@ async function logout(btn: HTMLButtonElement): Promise<void> {
   } catch {
     // 退出失败也照样回到登录页
   }
-  location.replace(plainUrl());
+  location.replace(location.pathname + location.search);
 }
 
 export function initSettings(): void {
@@ -186,21 +199,6 @@ export function initSettings(): void {
       if (state.cur && state.step === 3) renderPanel(false);
       renderTask();
     },
-  });
-
-  window.addEventListener('popstate', () => {
-    const want = location.hash === '#invites' && isOwner();
-    if (want && state.view !== 'settings') {
-      invitesShown = true;
-      showView('settings');
-      return;
-    }
-    if (state.view !== 'settings') return;
-    if (want && !invitesShown) {
-      showSettingsPage('invites');
-      invitesView.render(true);
-      window.scrollTo({ top: 0 });
-    } else if (!want && invitesShown) backToSettingsMain();
   });
 
   $('inviteEntry').addEventListener('click', (e) => {

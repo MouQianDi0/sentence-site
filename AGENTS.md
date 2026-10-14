@@ -4,7 +4,7 @@
 
 - `shared/`：前后端共用的接口数据类型（`types.ts`）、句子文本工具（`text.ts`）、知识点（`kb.ts`）。改接口返回的字段先改 `types.ts`，两边的类型检查会指出哪里要跟着改。
 - `api/`：后端，Node.js 22 直接运行 `.ts`（类型擦除，不编译），唯一运行依赖 `pg`。只能用能被擦除的 TS 语法（`erasableSyntaxOnly`：不要 enum、namespace、构造函数参数属性），相对路径的 import 要写 `.ts` 后缀，只引入类型时用 `import type`。后端只从 `@sentence-site/shared` 引入类型，不引入运行代码（生产镜像里没有 shared）。
-- `web/`：前端，Vite + Tailwind CSS v4 + GSAP。入口 `web/src/main.ts`；练习页在 `practice/`，设置页在 `settings/`，工具在 `lib/`。页面状态集中在 `state.ts`。Tailwind 类名要完整写出来（不能拼接），写在 `web/index.html` 或 `web/src` 里会被自动扫描。
+- `web/`：前端，Vite + Tailwind CSS v4 + GSAP。入口 `web/src/main.ts`；练习页在 `practice/`，设置页在 `settings/`，工具在 `lib/`。页面状态集中在 `state.ts`；练习、记录、设置各有地址（`/practice`、`/records`、`/settings`、`/settings/invites`），对应关系在 `router.ts`，新加页面也要在那里加地址。Tailwind 类名要完整写出来（不能拼接），写在 `web/index.html` 或 `web/src` 里会被自动扫描。
 - Docker Compose 部署，api 和 web 镜像在服务器上构建，构建上下文是仓库根目录。说明见 `README.md`。
 
 ## 先读出题规范
