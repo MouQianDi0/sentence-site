@@ -25,8 +25,10 @@ function splitCore(w) {
 /** 整句拆成单词，每个单词记住它属于哪一段、是不是谓语 */
 export function flat(s) {
   const out = [];
+  let ti = -1; // 第几个词块（圈谓语时整体点选的单位，如 was published），和第 1 步的点选编号一致
   s.segs.forEach((g, si) =>
     toks(g.t).forEach((t) => {
+      ti++;
       const parts = t.t.split(/\s+/);
       parts.forEach((w, j) => {
         const c = splitCore(w);
@@ -36,6 +38,7 @@ export function flat(s) {
           trail: c.trail + (j === parts.length - 1 ? t.p : ''),
           norm: c.core.toLowerCase().replace(/’/g, "'"),
           si,
+          ti,
           k: t.k,
         });
       });

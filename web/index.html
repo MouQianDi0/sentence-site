@@ -61,16 +61,15 @@
     <!-- 练习区：句子 + 三个步骤 -->
     <div id="work" class="flex flex-col gap-4">
     <section id="sheet" class="flex flex-col gap-2.5 rounded-2xl border border-line bg-sheet px-[18px] pt-4 pb-5 transition-shadow duration-200 data-[stuck]:shadow-[0_12px_28px_-14px_rgba(15,23,42,.45)]">
-      <div class="flex flex-wrap items-center justify-between gap-2">
-        <div class="flex min-w-0 flex-wrap items-center gap-2 font-mono text-[12px] tracking-[.03em] text-muted">
+      <!-- 图钉单独放在右上角；左边是句子信息和工具，窄屏时工具换到第二行 -->
+      <div class="flex items-start gap-2">
+      <div class="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-2">
+        <div class="flex min-h-[30px] min-w-0 flex-wrap items-center gap-2 font-mono text-[12px] tracking-[.03em] text-muted">
           <span id="label"></span>
           <span id="lvl" class="hidden rounded-full border border-line px-2"></span>
           <span id="focus"></span>
         </div>
         <div id="tools" class="flex items-center gap-1.5">
-          <button id="pin" aria-pressed="false" class="inline-flex h-[30px] w-[30px] flex-none cursor-pointer items-center justify-center rounded-full border-[1.5px] border-line bg-sheet text-muted transition-colors aria-pressed:border-accent aria-pressed:bg-accent aria-pressed:text-on-accent" aria-label="把句子固定在屏幕顶部" title="固定句子">
-            <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 2h5M6.5 2v4L4.5 8.5h7L9.5 6V2M8 8.5V14"/></svg>
-          </button>
           <button id="speak" class="hidden cursor-pointer items-center gap-1.5 rounded-full border-[1.5px] border-line bg-sheet px-3 py-1 text-[13px]" aria-label="朗读整句">
             <span class="inline-flex h-3 items-end gap-[2px]" aria-hidden="true"><i class="eq block h-full w-[2.5px] rounded-[1px] bg-current"></i><i class="eq block h-[70%] w-[2.5px] rounded-[1px] bg-current"></i><i class="eq block h-[85%] w-[2.5px] rounded-[1px] bg-current"></i></span>
             <span id="speakTxt">朗读</span>
@@ -84,6 +83,10 @@
           <button id="more" class="h-[30px] cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-2.5 text-[13px] text-muted" aria-label="删除这一句">删除</button>
         </div>
       </div>
+        <button id="pin" aria-pressed="false" class="inline-flex h-[30px] w-[30px] flex-none cursor-pointer items-center justify-center rounded-full border-[1.5px] border-line bg-sheet text-muted transition-colors aria-pressed:border-accent aria-pressed:bg-accent aria-pressed:text-on-accent" aria-label="把句子固定在屏幕顶部" title="固定句子">
+          <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 2h5M6.5 2v4L4.5 8.5h7L9.5 6V2M8 8.5V14"/></svg>
+        </button>
+      </div>
       <div id="voicePanel" class="hidden flex-wrap items-center gap-2 rounded-xl bg-raise px-3 py-2.5 text-[13.5px]">
         <label for="voiceSel" class="text-muted">声音</label>
         <select id="voiceSel" class="min-w-0 flex-[1_1_180px] rounded-lg border-[1.5px] border-line bg-sheet px-2 py-1"></select>
@@ -93,7 +96,7 @@
           <button data-rate="1.05" class="cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-2.5 py-0.5 font-mono text-[12px] aria-pressed:border-accent aria-pressed:text-accent">快</button>
         </div>
       </div>
-      <p id="sentence" class="m-0 font-en text-[17.5px] sm:text-[19px] leading-[2.15] [overflow-wrap:anywhere]"></p>
+      <p id="sentence" class="-mx-[3px] m-0 font-en text-[17.5px] sm:text-[19px] leading-[2.15] [overflow-wrap:anywhere]"></p>
       <p id="hint" class="m-0 hidden truncate text-[12.5px] text-muted"></p>
       <div id="wordCard"></div>
     </section>

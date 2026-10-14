@@ -197,8 +197,33 @@ function dotHTML(s, i, newCut) {
 }
 
 // ---------- 句子 ----------
-const W_BASE = 'inline cursor-pointer rounded-[5px] px-0.5 -mx-0.5 [line-height:inherit] transition-colors hover:bg-accent-soft data-[reading]:bg-read';
-const T_BASE = 'inline rounded-full px-0.5 -mx-0.5 [line-height:inherit] transition-colors data-[reading]:bg-read';
+// 句子排版：每个单词放进左右各留 3px 的“槽”（data-wi），所有步骤、所有状态下槽都一样宽，单词之间只隔一个空格。
+// 圈选、底色、描边、加粗、删除线都画在槽或分组上，不改变宽度；分组用可以跨行断开的 span，
+// 所以句子在任何步骤、点选前后，换行位置都完全一样，不会跳动。
+const SLOT = 'inline rounded-[5px] px-[3px] [line-height:inherit]';
+const GROUP = 'rounded-full box-decoration-clone [line-height:inherit] transition-colors data-[reading]:bg-read';
+// 单词前后的标点（引号、逗号、句号）用负边距收进槽的留白里，读起来紧贴单词，宽度在各步骤里同样不变
+const leadHTML = (x) => (x.lead ? `<span class="-mr-[3px]">${esc(x.lead)}</span>` : '');
+const trailHTML = (x) => (x.trail ? `<span class="-ml-[3px]">${esc(x.trail)}</span>` : '');
+// 可点的单词也用 span（role=button），不用 button：button 是整块的行内元素，和普通文字的断行规则不同
+const slotHTML = (x, i, cls = '', attrs = '') =>
+  `${leadHTML(x)}<span data-wi="${i}" class="${SLOT} ${cls}" ${attrs}>${esc(x.core)}</span>`;
+/** 把连续的单词按 key 分组（同一个词块 / 同一段），返回 [{key, a, b}]，a、b 是单词下标 */
+function groupsOf(fw, key) {
+  const out = [];
+  fw.forEach((x, i) => {
+    const last = out.at(-1);
+    if (last && last.key === x[key]) last.b = i;
+    else out.push({ key: x[key], a: i, b: i });
+  });
+  return out;
+}
+/** 一组单词：组内单词用空格隔开，最后一个词后面的标点放到组外 */
+function groupHTML(fw, g, inner, open, close = '</span>') {
+  const parts = [];
+  for (let i = g.a; i <= g.b; i++) parts.push(inner(fw[i], i) + (i < g.b ? trailHTML(fw[i]) : ''));
+  return `${open}${parts.join(' ')}${close}${trailHTML(fw[g.b])}`;
+}
 
 function renderSentence() {
   const el = $('sentence');
@@ -208,6 +233,7 @@ function renderSentence() {
     $('focus').textContent = '';
     $('lvl').classList.add('hidden');
     $('tools').classList.add('invisible');
+    $('pin').classList.add('invisible');
     el.innerHTML = loaded
       ? '<span class="flex flex-col gap-2 py-1.5"><span class="font-head text-[20px] font-bold">句库还是空的</span><span class="font-zh text-[15px] text-muted">每天早上 7:50 会自动加入 5 句新句子，也可以点上方“生成 5 句新句子”马上开始。</span></span>'
       : `<span class="flex flex-col gap-3 py-2"><span class="${C.shim} h-4"></span><span class="${C.shim} h-4 w-[86%]"></span><span class="${C.shim} h-4 w-[60%]"></span></span>`;
@@ -216,6 +242,7 @@ function renderSentence() {
     return;
   }
   $('tools').classList.remove('invisible');
+  $('pin').classList.remove('invisible');
   hint.classList.remove('hidden');
   $('label').textContent = `句子 ${sentences.indexOf(cur) + 1} / ${sentences.length}`;
   $('lvl').classList.toggle('hidden', !cur.level);
@@ -231,11 +258,11 @@ function renderSentence() {
     const pm = phraseMap(cur, fw);
     el.innerHTML = fw
       .map((x, i) => {
-        let c = W_BASE;
+        let c = 'cursor-pointer transition-colors hover:bg-accent-soft data-[reading]:bg-read';
         if (pm[i] != null) c += ' underline decoration-dotted decoration-accent decoration-2 underline-offset-[5px]';
         if (step === 3 && x.k) c += ' fake-bold';
         if (wordSel === i) c += ' bg-accent text-on-accent hover:bg-accent';
-        return `${esc(x.lead)}<button class="${c}" data-w="${i}" data-a="${i}" data-b="${i}">${esc(x.core)}</button>${esc(x.trail)}`;
+        return slotHTML(x, i, c, `data-w="${i}" data-a="${i}" data-b="${i}" role="button" tabindex="0"`) + trailHTML(x);
       })
       .join(' ');
     hint.textContent = (cur.phrases || []).length ? '点单词看释义，虚线下划线是固定搭配。' : '点单词看释义。';
@@ -244,71 +271,59 @@ function renderSentence() {
     el.innerHTML = fw
       .map((x, i) => {
         const k = fix.tag[i];
-        let c = `${W_BASE} ${fix.busy ? 'cursor-default' : ''}`;
+        let c = `transition-colors ${fix.busy ? 'cursor-default' : 'cursor-pointer hover:bg-accent-soft'}`;
         if (k === 'main') c += ' bg-ok-soft fake-bold text-ok shadow-[inset_0_0_0_2px_var(--ok)]';
         else if (k === 'sub') c += ' text-ok shadow-[inset_0_0_0_2px_var(--ok)]';
-        return `${esc(x.lead)}<button class="${c}" data-fx="${i}" aria-label="${esc(x.core)}：${k === 'main' ? '主句谓语' : k === 'sub' ? '从句谓语' : '不是谓语'}">${esc(x.core)}</button>${esc(x.trail)}`;
+        const label = `${esc(x.core)}：${k === 'main' ? '主句谓语' : k === 'sub' ? '从句谓语' : '不是谓语'}`;
+        return slotHTML(x, i, c, `data-fx="${i}" aria-label="${label}" role="button" tabindex="0"`) + trailHTML(x);
       })
       .join(' ');
   } else if (step === 1) {
     hint.textContent = checked ? '绿框是谓语，绿底是主句谓语。' : '点出句子里所有的谓语动词。';
-    const t = [];
-    let wi = 0;
-    cur.segs.forEach((g) =>
-      toks(g.t).forEach((tk) => {
-        const n = tk.t.split(/\s+/).length;
-        t.push({ a: wi, b: wi + n - 1, ...tk });
-        wi += n;
-      }),
-    );
-    el.innerHTML = t
-      .map((tk, i) => {
-        let c = T_BASE;
+    // 词块用 span（不是 button），was published 这种多词词块到行尾时可以和别的步骤一样断开换行
+    el.innerHTML = groupsOf(fw, 'ti')
+      .map((g) => {
+        const t = g.key;
+        const k = fw[g.a].k;
+        const sel = picked.has(t);
+        let c = GROUP;
         if (checked) {
-          const sel = picked.has(i);
-          if (tk.k && sel) c += ' shadow-[inset_0_0_0_2px_var(--ok)] text-ok';
-          else if (tk.k) c += ' shadow-[inset_0_0_0_2px_var(--ok)] text-ok bg-[repeating-linear-gradient(135deg,var(--ok-soft)_0_4px,transparent_4px_8px)]';
+          if (k && sel) c += ' shadow-[inset_0_0_0_2px_var(--ok)] text-ok';
+          else if (k) c += ' shadow-[inset_0_0_0_2px_var(--ok)] text-ok bg-[repeating-linear-gradient(135deg,var(--ok-soft)_0_4px,transparent_4px_8px)]';
           else if (sel) c += ' shadow-[inset_0_0_0_2px_var(--bad)] text-bad line-through';
-          if (tk.k === 'main') c += ' bg-ok-soft fake-bold';
+          if (k === 'main') c += ' bg-ok-soft fake-bold';
           c += ' cursor-default';
         } else {
           c += ' cursor-pointer hover:bg-accent-soft';
-          if (picked.has(i)) c += ' shadow-[inset_0_0_0_2px_var(--accent)] text-accent';
+          if (sel) c += ' shadow-[inset_0_0_0_2px_var(--accent)] text-accent';
         }
-        return `<button class="${c}" data-t="${i}" data-a="${tk.a}" data-b="${tk.b}" ${checked ? 'tabindex="-1"' : ''} aria-pressed="${picked.has(i)}">${esc(tk.t)}</button>${esc(tk.p)}`;
+        const attrs = `class="${c}" data-t="${t}" data-a="${g.a}" data-b="${g.b}" role="button" ${checked ? 'aria-disabled="true"' : 'tabindex="0"'} aria-pressed="${sel}"`;
+        return groupHTML(fw, g, (x, i) => slotHTML(x, i), `<span ${attrs}>`);
       })
       .join(' ');
   } else {
     hint.textContent = '点彩色片段，看它是什么成分、修饰谁。';
     // 只看主干：按主干句里的词点亮（宾语从句这类主干缺不了的从句骨架也会保留）；主干对不上原句时退回按成分颜色
     const tw = mainOnly ? trunkWords(cur) : null;
-    let wi = 0;
-    el.innerHTML = cur.segs
-      .map((g, si) => {
-        const tk = toks(g.t);
-        const n = tk.reduce((acc, x) => acc + x.t.split(/\s+/).length, 0);
-        const a = wi;
-        wi += n;
+    el.innerHTML = groupsOf(fw, 'si')
+      .map((sg) => {
+        const si = sg.key;
+        const g = cur.segs[si];
         const rc = ROLE_CLS[g.r] || ROLE_CLS.main;
-        let c = `cursor-pointer rounded-[3px] px-0.5 -mx-0.5 py-0.5 box-decoration-clone bg-[linear-gradient(var(--hl),var(--hl))] bg-no-repeat border-b-[2.5px] transition-opacity duration-200 data-[reading]:outline-2 data-[reading]:outline-read ${rc.hl}`;
+        let c = `cursor-pointer rounded-[3px] py-0.5 box-decoration-clone bg-[linear-gradient(var(--hl),var(--hl))] bg-no-repeat border-b-[2.5px] transition-opacity duration-200 data-[reading]:outline-2 data-[reading]:outline-read ${rc.hl}`;
         const colored = roleOn[g.r] && !(tw && g.r !== 'main');
         c += colored ? ` ${rc.border}` : ' border-transparent';
         if (mainOnly && !tw && g.r !== 'main') c += ' opacity-20';
         if (segPick === si) c += ' outline-2 outline-offset-1 outline-ink';
-        let k = a;
-        const word = (w) => {
-          const on = !tw || tw.has(k);
-          k++;
-          return on ? esc(w) : `<span class="opacity-20">${esc(w)}</span>`;
-        };
-        const inner = tk
-          .map((x) => {
-            const ws = x.t.split(/\s+/).map(word).join(' ');
-            if (x.k === 'main') return `<span class="fake-bold underline decoration-2 underline-offset-4">${ws}</span>${esc(x.p)}`;
-            return x.k === 'sub' ? `<span class="fake-bold">${ws}</span>${esc(x.p)}` : ws;
-          })
-          .join(' ');
-        return `<span class="${c}" style="background-size:${colored ? '100%' : '0%'} 100%" data-seg="${si}" data-a="${a}" data-b="${wi - 1}" tabindex="0" role="button">${inner}</span>`;
+        const word = (x, i) => slotHTML(x, i, tw && !tw.has(i) ? 'opacity-20' : '');
+        // 段内再按词块分组：谓语词块整体加粗；主句谓语再画一条连贯的底线（用背景画，单词槽的留白处也连着）
+        const parts = groupsOf(fw.slice(sg.a, sg.b + 1), 'ti').map((tg) => {
+          const at = { a: tg.a + sg.a, b: tg.b + sg.a };
+          const k = fw[at.a].k;
+          if (!k) return groupHTML(fw, at, word, '', '');
+          return groupHTML(fw, at, word, `<span class="fake-bold${k === 'main' ? ' box-decoration-clone bg-[linear-gradient(currentColor,currentColor)] bg-[length:100%_2px] bg-bottom bg-no-repeat' : ''}">`);
+        });
+        return `<span class="${c}" style="background-size:${colored ? '100%' : '0%'} 100%" data-seg="${si}" data-a="${sg.a}" data-b="${sg.b}" tabindex="0" role="button">${parts.join(' ')}</span>`;
       })
       .join(' ');
     if (sweepPending) {
@@ -898,13 +913,22 @@ function updStuck() {
   const top = parseFloat(getComputedStyle(el).top);
   el.toggleAttribute('data-stuck', !!ui.pin && window.scrollY > 0 && el.getBoundingClientRect().top <= top + 0.5);
 }
-function applyPin() {
+/** scroll：刚点图钉时把句子卡片滚到屏幕顶部，马上看到效果 */
+function applyPin(scroll = false) {
   const on = !!ui.pin;
   const b = $('pin');
+  const el = $('sheet');
   b.setAttribute('aria-pressed', String(on));
   b.setAttribute('aria-label', on ? '取消固定句子' : '把句子固定在屏幕顶部');
   b.title = on ? '取消固定' : '固定句子';
-  PIN_CLS.forEach((c) => $('sheet').classList.toggle(c, on));
+  PIN_CLS.forEach((c) => el.classList.toggle(c, on));
+  // 下面的内容很短时页面滚不动，卡片就到不了顶部；固定期间给练习区补足一屏高度
+  $('work').classList.toggle('min-h-[calc(100dvh-8px)]', on);
+  if (on && scroll) {
+    const top = parseFloat(getComputedStyle(el).top) || 8;
+    const d = el.getBoundingClientRect().top - top;
+    if (d > 1) window.scrollTo({ top: window.scrollY + d, behavior: A.motion ? 'smooth' : 'auto' });
+  }
   updStuck();
 }
 let stuckRaf = 0;
@@ -1287,7 +1311,7 @@ $('more').onclick = onDelete;
 $('pin').onclick = () => {
   ui.pin = !ui.pin;
   saveUI();
-  applyPin();
+  applyPin(true);
   toast(ui.pin ? '句子已固定在屏幕顶部，再点图钉取消' : '已取消固定');
 };
 applyPin();
@@ -1358,7 +1382,6 @@ $('sentence').addEventListener('click', (e) => {
     picked.has(i) ? picked.delete(i) : picked.add(i);
     renderSentence();
     renderPanel(false);
-    if (picked.has(i)) A.pop($('sentence').querySelector(`[data-t="${i}"]`));
     return;
   }
   const g = e.target.closest('[data-seg]');
@@ -1370,7 +1393,8 @@ $('sentence').addEventListener('click', (e) => {
   }
 });
 $('sentence').addEventListener('keydown', (e) => {
-  if ((e.key === 'Enter' || e.key === ' ') && e.target.dataset.seg !== undefined) {
+  const d = e.target.dataset || {};
+  if ((e.key === 'Enter' || e.key === ' ') && (d.seg !== undefined || d.t !== undefined || d.w !== undefined || d.fx !== undefined)) {
     e.preventDefault();
     e.target.click();
   }
@@ -1463,7 +1487,6 @@ $('panel').addEventListener('click', (e) => {
         renderSentence();
         renderPanel(true);
       });
-      A.popEach($('sentence').querySelectorAll('[data-t]'));
       return;
     }
     case 'clear':
