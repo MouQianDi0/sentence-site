@@ -107,6 +107,44 @@ jobs:
           code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
             -d '{"password":"ci-password"}' http://127.0.0.1:8080/api/unlock)
           [ "$code" = 200 ] || { echo "::error::登录失败（$code）"; exit 1; }
+      # 模拟服务器上开了 HTTPS 以后的样子（scripts/enable-https.sh）：网站容器只在本机 8081 监听，
+      # 前面一层 Nginx 用脚本生成的配置做 HTTPS（这里用自签证书代替 Let's Encrypt）
+      - name: HTTPS 转发
+        run: |
+          set -x
+          sed -i 's/^WEB_PORT=.*/WEB_PORT=8081/' .env
+          printf 'WEB_BIND=127.0.0.1\n' >> .env
+          docker compose up -d 2>&1 | tee "$RUNNER_TEMP/step.log"
+          for i in $(seq 1 30); do curl -fsS http://127.0.0.1:8081/api/health >/dev/null 2>&1 && break; sleep 2; done
+          d="$RUNNER_TEMP/https"
+          mkdir -p "$d/ssl" "$d/acme"
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 1 -subj '/CN=127.0.0.1' \
+            -addext 'subjectAltName=IP:127.0.0.1' -keyout "$d/ssl/key.pem" -out "$d/ssl/fullchain.pem" 2>/dev/null
+          bash scripts/enable-https.sh --render 127.0.0.1 8081 8080 > "$d/site.conf"
+          docker run -d --name front --network host \
+            -v "$d/site.conf:/etc/nginx/conf.d/default.conf:ro" \
+            -v "$d/ssl:/etc/nginx/ssl/sentence-site:ro" \
+            -v "$d/acme:/var/www/acme:ro" nginx:1.27-alpine
+          sleep 2
+          docker logs front 2>&1 | tee -a "$RUNNER_TEMP/step.log"
+          c="--cacert $d/ssl/fullchain.pem -fsS"
+          curl $c https://127.0.0.1/api/health | grep -q '"db":true'
+          [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1/)" = 301 ]
+          [ "$(curl -s -o /dev/null -w '%{redirect_url}' http://127.0.0.1:8080/x)" = https://127.0.0.1/x ]
+          # 登录 Cookie 要带 Secure（后端认出了 HTTPS）
+          curl $c -c "$d/owner" -D "$d/h" -o /dev/null -X POST -H 'Content-Type: application/json' \
+            -d '{"password":"ci-password"}' https://127.0.0.1/api/unlock
+          grep -i '^set-cookie: ss_session=' "$d/h" | grep -qi 'secure' || { echo "::error::登录 Cookie 没有 Secure"; exit 1; }
+          # 后端看到的是访问者的真实 IP（这里是 127.0.0.1），不是 Docker 内网地址
+          code=$(curl $c -b "$d/owner" -X POST -H 'Content-Type: application/json' -d '{"note":"ci"}' \
+            https://127.0.0.1/api/admin/invites | python3 -c 'import json,sys; print(json.load(sys.stdin)["invite"]["code"])')
+          curl $c -c "$d/member" -o /dev/null -X POST -H 'Content-Type: application/json' \
+            -d "{\"password\":\"$code\"}" https://127.0.0.1/api/unlock
+          ip=$(curl $c -b "$d/owner" https://127.0.0.1/api/admin/invites \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["invites"][0]["devices"][0]["ip"])')
+          [ "$ip" = 127.0.0.1 ] || { echo "::error::后端看到的 IP 是 $ip，不是真实 IP"; exit 1; }
+          # 网站容器不再对外：只有本机 127.0.0.1:8081
+          docker compose port web 80 | grep -q '^127.0.0.1:8081$'
       - name: 出错时打印日志
         if: failure()
         run: |
@@ -115,4 +153,6 @@ jobs:
           echo "::error title=出错的输出（最后 60 行）::$body"
       - name: 清理
         if: always()
-        run: docker compose down -v
+        run: |
+          docker rm -f front >/dev/null 2>&1 || true
+          docker compose down -v

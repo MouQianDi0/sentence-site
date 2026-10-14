@@ -26,7 +26,7 @@ const ICON = {
     '<svg class="h-[18px] w-[18px]" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h11A1.5 1.5 0 0 1 17 6.5V8a2 2 0 0 0 0 4v1.5a1.5 1.5 0 0 1-1.5 1.5h-11A1.5 1.5 0 0 1 3 13.5V12a2 2 0 0 0 0-4z"/><path d="M12 5.5v1.5M12 9.25v1.5M12 13v1.5" stroke-linecap="round"/></svg>',
 };
 
-/** 网站现在是 http，浏览器的剪贴板接口用不了，退回到老办法 */
+/** 复制到剪贴板：HTTPS 下用浏览器的剪贴板接口；还是 http 或者接口不能用时，退回到老办法 */
 async function copyText(text: string): Promise<boolean> {
   try {
     if (navigator.clipboard && window.isSecureContext) {

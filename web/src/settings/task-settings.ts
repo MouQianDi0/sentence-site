@@ -28,6 +28,8 @@ export const fmtAt = (s = ''): string => s.replace(/^0(\d)/, '$1');
 const C = {
   card: 'rounded-2xl border border-line bg-sheet',
   label: 'font-mono text-[11px] tracking-[.1em] uppercase text-muted',
+  select:
+    'cursor-pointer appearance-none rounded-xl border-[1.5px] border-line bg-sheet py-1.5 pr-7 pl-3 font-mono text-[15px] text-ink tabular-nums outline-none transition-colors hover:border-accent focus:border-accent disabled:cursor-not-allowed disabled:hover:border-line',
   step: 'flex h-10 w-10 cursor-pointer items-center justify-center text-[20px] leading-none transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-35',
 };
 
@@ -82,6 +84,27 @@ export function createTaskSettings({
     return `每天 ${esc(fmtAt(cfg.dailyAt))} 自动准备今天的 ${cfg.dailyCount} 句。改成已经过了的时间，今天还没生成的话一分钟内就会生成。${member}`;
   }
 
+  /** 时、分两个下拉框，样式和页面上其他输入框一样（不用浏览器自带的时间控件，它在各家浏览器里长得都不一样） */
+  function timeHTML(on: boolean): string {
+    if (!cfg) return '';
+    const [h = '07', m = '50'] = cfg.dailyAt.split(':');
+    const hours = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
+    // 分钟按 5 分钟一档；以前存的不在档上的时间也保留在列表里
+    const mins = Array.from({ length: 12 }, (_, i) => String(i * 5).padStart(2, '0'));
+    if (!mins.includes(m)) {
+      mins.push(m);
+      mins.sort();
+    }
+    const select = (id: string, label: string, list: string[], value: string) =>
+      `<span class="relative inline-flex">
+        <select id="${id}" aria-label="${label}" ${on ? '' : 'disabled'} class="${C.select}">${list
+          .map((v) => `<option value="${v}" ${v === value ? 'selected' : ''}>${v}</option>`)
+          .join('')}</select>
+        <svg class="pointer-events-none absolute top-1/2 right-2.5 h-3.5 w-3.5 -translate-y-1/2 text-muted" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6l4 4 4-4"/></svg>
+      </span>`;
+    return `${select('taskHour', '时', hours, h)}<span class="font-mono text-[16px] text-muted">:</span>${select('taskMin', '分', mins, m)}`;
+  }
+
   function autoHTML(): string {
     if (!cfg) return '';
     const server = cfg.serverDaily !== false;
@@ -89,11 +112,10 @@ export function createTaskSettings({
     return `<div class="flex flex-col gap-2 border-t border-line pt-3.5">
       <button type="button" role="switch" aria-checked="${on}" data-act="auto" ${server ? '' : 'disabled'} class="group flex w-max cursor-pointer items-center gap-2.5 text-[14px] font-semibold select-none disabled:cursor-not-allowed disabled:opacity-50">
         <span class="relative h-[23px] w-10 flex-none rounded-full bg-line transition-colors group-aria-checked:bg-accent"><span class="absolute top-[3px] left-[3px] h-[17px] w-[17px] rounded-full bg-sheet transition-transform group-aria-checked:translate-x-[17px]"></span></span>每天自动生成</button>
-      <div class="flex flex-wrap items-center gap-2 text-[14px] ${on ? '' : 'opacity-50'}">
-        <label for="taskAt">生成时间</label>
-        <input id="taskAt" type="time" step="60" required value="${esc(cfg.dailyAt)}" ${on ? '' : 'disabled'}
-          class="min-w-[7em] rounded-xl border-[1.5px] border-line bg-sheet px-2.5 py-1.5 font-mono text-[15px] tabular-nums outline-none transition-colors focus:border-accent disabled:cursor-not-allowed">
-        <span class="text-[12.5px] text-muted">北京时间</span>
+      <div class="flex flex-wrap items-center gap-1.5 text-[14px] ${on ? '' : 'opacity-50'}">
+        <label for="taskHour" class="mr-1">生成时间</label>
+        ${timeHTML(on)}
+        <span class="ml-1 text-[12.5px] text-muted">北京时间</span>
       </div>
       <span id="taskAutoHint" class="text-[12.5px] text-muted">${autoHint()}</span>
     </div>`;
@@ -196,15 +218,14 @@ export function createTaskSettings({
     A.pop(root.querySelector('#taskCount'));
   });
 
-  // 时间选好（change）才保存；清空了就恢复原来的时间
+  // 选好时或分就保存（不重画卡片，免得打断正在选的下拉框）
   root.addEventListener('change', (e) => {
-    const input = e.target as HTMLInputElement;
-    if (input.id !== 'taskAt' || !cfg) return;
-    const v = input.value;
-    if (!/^\d{2}:\d{2}$/.test(v)) {
-      input.value = cfg.dailyAt;
-      return;
-    }
+    const id = (e.target as HTMLElement).id;
+    if ((id !== 'taskHour' && id !== 'taskMin') || !cfg) return;
+    const h = root.querySelector<HTMLSelectElement>('#taskHour')?.value;
+    const m = root.querySelector<HTMLSelectElement>('#taskMin')?.value;
+    if (!h || !m) return;
+    const v = `${h}:${m}`;
     if (v !== cfg.dailyAt) save({ dailyAt: v }, { rerender: false });
   });
 
