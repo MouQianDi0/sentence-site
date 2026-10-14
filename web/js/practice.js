@@ -1,4 +1,5 @@
-// “设置”页里的“每日任务”卡片：出四级还是六级（可以都选，混合随机）、每天几句（1–10）。改了自动保存。
+// “设置”页里的“每日任务”卡片：出四级还是六级（可以都选，混合随机）、每天几句（1–10）、
+// 每天几点自动生成（北京时间，也可以关掉）。改了自动保存。
 import { api } from './api.js';
 import { esc } from './text.js';
 import * as A from './anim.js';
@@ -14,29 +15,43 @@ export function levelText(levels = []) {
   return names.length > 1 ? `${names.join(' + ')}混合` : names[0] || '';
 }
 
+/** 这个账户每天会不会自动生成：自己开着，服务器也没关 */
+export const autoOn = (p) => Boolean(p?.autoDaily) && p?.serverDaily !== false;
+
+/** '07:50' → '7:50'（页面上显示用） */
+export const fmtAt = (s = '') => s.replace(/^0(\d)/, '$1');
+
 const C = {
   card: 'rounded-2xl border border-line bg-sheet',
   label: 'font-mono text-[11px] tracking-[.1em] uppercase text-muted',
   step: 'flex h-10 w-10 cursor-pointer items-center justify-center text-[20px] leading-none transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-35',
 };
 
-export function createTaskSettings({ root, toast, onChange }) {
+/** role()：当前账户是 owner 还是 member（邀请账户的提示多一句） */
+export function createTaskSettings({ root, toast, onChange, role = () => 'owner' }) {
   let cfg = null;
   let err = '';
   let saveTimer = null;
   let status = ''; // saving | saved | 错误信息
 
-  async function open() {
-    err = '';
-    status = '';
+  /** 读取设置；返回数据有没有变化（设置页据此决定要不要重新画） */
+  async function load() {
     try {
-      cfg = await api.practiceSettings();
+      const next = await api.practiceSettings();
+      const changed = !cfg || JSON.stringify(next) !== JSON.stringify(cfg);
+      cfg = next;
+      err = '';
+      return changed;
     } catch (e) {
+      if (cfg) return false; // 有上次读到的数据就继续显示它
+      const changed = err !== e.message;
       err = e.message;
+      return changed;
     }
-    render();
-    if (root.firstElementChild) A.enter(root.children);
   }
+
+  /** 正在保存、或者正在改时间：后台刷新时先别重画，免得打断 */
+  const editing = () => status === 'saving' || root.contains(document.activeElement);
 
   function statusHTML() {
     if (status === 'saving') return '<span class="text-muted">保存中…</span>';
@@ -44,7 +59,30 @@ export function createTaskSettings({ root, toast, onChange }) {
     return status ? `<span class="text-bad">${esc(status)}</span>` : '';
   }
 
-  function render() {
+  function autoHint() {
+    if (cfg.serverDaily === false) return '网站关闭了每日自动生成，每天在练习页点“现在生成”就行。';
+    if (!cfg.autoDaily) return '已关闭：不会自动生成，每天在练习页点“现在生成”。';
+    const member = role() === 'member' ? '需要先在下面配好模型；连续 7 天没登录会暂停，回来点一下就能生成。' : '';
+    return `每天 ${esc(fmtAt(cfg.dailyAt))} 自动准备今天的 ${cfg.dailyCount} 句。改成已经过了的时间，今天还没生成的话一分钟内就会生成。${member}`;
+  }
+
+  function autoHTML() {
+    const server = cfg.serverDaily !== false;
+    const on = server && cfg.autoDaily;
+    return `<div class="flex flex-col gap-2 border-t border-line pt-3.5">
+      <button type="button" role="switch" aria-checked="${on}" data-act="auto" ${server ? '' : 'disabled'} class="group flex w-max cursor-pointer items-center gap-2.5 text-[14px] font-semibold select-none disabled:cursor-not-allowed disabled:opacity-50">
+        <span class="relative h-[23px] w-10 flex-none rounded-full bg-line transition-colors group-aria-checked:bg-accent"><span class="absolute top-[3px] left-[3px] h-[17px] w-[17px] rounded-full bg-sheet transition-transform group-aria-checked:translate-x-[17px]"></span></span>每天自动生成</button>
+      <div class="flex flex-wrap items-center gap-2 text-[14px] ${on ? '' : 'opacity-50'}">
+        <label for="taskAt">生成时间</label>
+        <input id="taskAt" type="time" step="60" required value="${esc(cfg.dailyAt)}" ${on ? '' : 'disabled'}
+          class="min-w-[7em] rounded-xl border-[1.5px] border-line bg-sheet px-2.5 py-1.5 font-mono text-[15px] tabular-nums outline-none transition-colors focus:border-accent disabled:cursor-not-allowed">
+        <span class="text-[12.5px] text-muted">北京时间</span>
+      </div>
+      <span id="taskAutoHint" class="text-[12.5px] text-muted">${autoHint()}</span>
+    </div>`;
+  }
+
+  function render(enter = false) {
     if (err) {
       root.innerHTML = `<div class="rounded-xl bg-bad-soft px-3.5 py-3 text-[14px]">读取每日任务设置失败：${esc(err)}</div>`;
       return;
@@ -73,8 +111,10 @@ export function createTaskSettings({ root, toast, onChange }) {
           </div>
           <span class="text-[14px] text-muted">句 / 天（最多 ${cfg.maxDaily} 句）</span>
         </div>
-        <span class="text-[12.5px] text-muted">${cfg.autoDaily ? `每天 ${esc(cfg.dailyAt)} 自动生成今天的句子。` : ''}今天的已经生成了的话，调多了可以在练习页“补齐”；完成后还可以加练。</span></div>
+        <span class="text-[12.5px] text-muted">今天的已经生成了的话，调多了可以在练习页“补齐”；完成后还可以加练。</span></div>
+      ${autoHTML()}
     </section>`;
+    if (enter) A.enter(root.children);
   }
 
   function setStatus(s) {
@@ -83,15 +123,19 @@ export function createTaskSettings({ root, toast, onChange }) {
     if (el) el.innerHTML = statusHTML();
   }
 
-  // 连续点加减号时只保存最后一次
-  function save(patch) {
+  // 连续点加减号时只保存最后一次。rerender=false：只改提示，不重画整张卡片（改时间时不打断时间选择器）
+  function save(patch, { rerender = true } = {}) {
     cfg = { ...cfg, ...patch };
-    render();
+    if (rerender) render();
+    else {
+      const hint = root.querySelector('#taskAutoHint');
+      if (hint) hint.innerHTML = autoHint();
+    }
     setStatus('saving');
     clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       try {
-        cfg = await api.savePracticeSettings({ levels: cfg.levels, dailyCount: cfg.dailyCount });
+        cfg = await api.savePracticeSettings({ levels: cfg.levels, dailyCount: cfg.dailyCount, autoDaily: cfg.autoDaily, dailyAt: cfg.dailyAt });
         setStatus('saved');
         onChange && onChange(cfg);
       } catch (e) {
@@ -119,10 +163,25 @@ export function createTaskSettings({ root, toast, onChange }) {
     }
     const a = e.target.closest('[data-act]');
     if (!a) return;
+    if (a.dataset.act === 'auto') {
+      save({ autoDaily: !cfg.autoDaily });
+      return;
+    }
     if (a.dataset.act === 'countMinus' && cfg.dailyCount > 1) save({ dailyCount: cfg.dailyCount - 1 });
     if (a.dataset.act === 'countPlus' && cfg.dailyCount < cfg.maxDaily) save({ dailyCount: cfg.dailyCount + 1 });
     A.pop(root.querySelector('#taskCount'));
   });
 
-  return { open, get: () => cfg };
+  // 时间选好（change）才保存；清空了就恢复原来的时间
+  root.addEventListener('change', (e) => {
+    if (e.target.id !== 'taskAt' || !cfg) return;
+    const v = e.target.value;
+    if (!/^\d{2}:\d{2}$/.test(v)) {
+      e.target.value = cfg.dailyAt;
+      return;
+    }
+    if (v !== cfg.dailyAt) save({ dailyAt: v }, { rerender: false });
+  });
+
+  return { load, render, editing, hasData: () => Boolean(cfg), get: () => cfg };
 }

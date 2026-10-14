@@ -12,8 +12,8 @@
 <body class="min-h-screen bg-paper text-ink font-zh text-[15px] leading-relaxed antialiased">
 
 <!-- 访问密码 -->
-<div id="lock" class="fixed inset-0 z-30 hidden items-center justify-center bg-paper px-4">
-  <form id="lockForm" class="w-full max-w-sm flex flex-col gap-4 rounded-2xl border border-line bg-sheet p-6">
+<div id="lock" class="fixed inset-0 z-30 hidden items-start justify-center overflow-y-auto bg-paper px-4 py-8">
+  <form id="lockForm" class="my-auto w-full max-w-sm flex flex-col gap-4 rounded-2xl border border-line bg-sheet p-6">
     <div class="flex flex-col gap-1">
       <span class="font-mono text-[11.5px] tracking-[.12em] uppercase text-accent">CET-4 / 6 · 长难句</span>
       <h1 class="font-head text-[26px] font-bold leading-tight">长难句拆解台</h1>
@@ -25,6 +25,20 @@
       placeholder="访问密码或邀请码">
     <p id="lockErr" class="hidden rounded-lg bg-bad-soft px-3 py-2 text-[14px]" role="alert"></p>
     <button id="lockBtn" type="submit" class="rounded-full bg-accent px-4 py-2.5 font-semibold text-on-accent transition-transform active:scale-[.98] disabled:opacity-50">进入</button>
+    <!-- 邀请码须知：对方第一次用邀请码登录前就能看到 -->
+    <section aria-labelledby="inviteNoticeTitle" class="flex flex-col gap-2 rounded-xl bg-raise px-3.5 py-3">
+      <h2 id="inviteNoticeTitle" class="m-0 flex items-center gap-1.5 text-[13.5px] font-semibold">
+        <svg class="h-4 w-4 flex-none text-accent" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 7.2v3.8M8 4.9v.1" stroke-linecap="round"/></svg>
+        用邀请码登录前请看
+      </h2>
+      <ul class="m-0 flex list-disc flex-col gap-1 pl-[1.15em] text-[13px] leading-[1.6] text-muted marker:text-line">
+        <li>一个邀请码对应一个独立账户，句库、练习记录和设置只有你自己看得到。大小写和中间的横线输不输都行。</li>
+        <li>每个邀请码只能在<b class="font-semibold text-ink">限定数量的设备</b>上登录（一般是 2 台）。换浏览器、清除浏览器数据或用无痕模式都算新设备，名额满了要找管理员移除旧设备。</li>
+        <li>AI 批改、查词和出题要用<b class="font-semibold text-ink">你自己的大模型 API 密钥</b>：登录后在“设置”里填好才能用，调用费用由你的模型平台账户承担。</li>
+        <li>请不要把邀请码转给别人，别人用它登录能看到你的全部记录，还会占掉你的设备名额。</li>
+        <li>管理员删除邀请码后，这个账户和里面的数据会一起删除，不能恢复。</li>
+      </ul>
+    </section>
   </form>
 </div>
 
@@ -121,10 +135,18 @@
   <section id="viewRecords" class="hidden flex-col gap-4"></section>
 
   <section id="viewSettings" class="hidden flex-col gap-4">
-    <div id="taskSettings" class="flex flex-col gap-4"></div>
-    <div id="inviteSettings" class="flex flex-col gap-4"></div>
-    <div id="llmSettings" class="flex flex-col gap-4"></div>
-    <div id="accountSettings" class="flex flex-col gap-4"></div>
+    <!-- 设置主页：几块数据一起读好再一起显示，免得一块一块跳出来 -->
+    <div id="settingsMain" class="flex flex-col gap-4">
+      <div id="settingsLoading" class="hidden items-center gap-2 py-2 text-[14px] text-muted" role="status">
+        <span class="inline-block h-4 w-4 flex-none animate-spin rounded-full border-2 border-line border-t-accent"></span>正在读取设置…
+      </div>
+      <div id="taskSettings" class="flex flex-col gap-4"></div>
+      <div id="inviteEntry" class="flex flex-col gap-4"></div>
+      <div id="llmSettings" class="flex flex-col gap-4"></div>
+      <div id="accountSettings" class="flex flex-col gap-4"></div>
+    </div>
+    <!-- 邀请码管理（只有管理员）：从设置主页点进来的单独页面 -->
+    <div id="settingsInvites" class="hidden flex-col gap-4"></div>
   </section>
 </div>
 

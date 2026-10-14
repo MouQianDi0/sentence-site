@@ -5,11 +5,16 @@ import { esc } from './text.js';
 import * as A from './anim.js';
 
 // 模型名会随平台更新，这里只是起点；可以点“获取模型列表”拿到平台当前提供的。id 和后端 settings.js 的 PROVIDERS 一致
+// keyUrl：各平台创建 API Key 的页面（登录后才能看到），keySite：链接上显示的平台名
 const PRESETS = [
-  { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', main: 'deepseek-v4-pro', light: 'deepseek-flash', models: ['deepseek-v4-pro', 'deepseek-flash'] },
-  { id: 'qwen', name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', main: 'qwen-plus', light: 'qwen-turbo', models: ['qwen-max', 'qwen-plus', 'qwen-turbo'] },
-  { id: 'glm', name: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', main: 'glm-4-plus', light: 'glm-4-flash', models: ['glm-4-plus', 'glm-4-air', 'glm-4-flash'] },
-  { id: 'kimi', name: 'Kimi', baseUrl: 'https://api.moonshot.cn/v1', main: 'moonshot-v1-8k', light: '', models: ['moonshot-v1-8k', 'moonshot-v1-32k'] },
+  { id: 'deepseek', name: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', main: 'deepseek-v4-pro', light: 'deepseek-flash', models: ['deepseek-v4-pro', 'deepseek-flash'],
+    keyUrl: 'https://platform.deepseek.com/api_keys', keySite: 'DeepSeek 开放平台' },
+  { id: 'qwen', name: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', main: 'qwen-plus', light: 'qwen-turbo', models: ['qwen-max', 'qwen-plus', 'qwen-turbo'],
+    keyUrl: 'https://bailian.console.aliyun.com/cn-beijing/model/settings/api-key', keySite: '阿里云百炼' },
+  { id: 'glm', name: '智谱 GLM', baseUrl: 'https://open.bigmodel.cn/api/paas/v4', main: 'glm-4-plus', light: 'glm-4-flash', models: ['glm-4-plus', 'glm-4-air', 'glm-4-flash'],
+    keyUrl: 'https://bigmodel.cn/usercenter/proj-mgmt/apikeys', keySite: '智谱开放平台' },
+  { id: 'kimi', name: 'Kimi', baseUrl: 'https://api.moonshot.cn/v1', main: 'moonshot-v1-8k', light: '', models: ['moonshot-v1-8k', 'moonshot-v1-32k'],
+    keyUrl: 'https://platform.kimi.com/console/api-keys', keySite: 'Kimi 开放平台' },
   { id: 'custom', name: '其他平台', baseUrl: '', main: '', light: '', models: [] },
 ];
 const presetById = (id) => PRESETS.find((p) => p.id === id) || null;
@@ -29,7 +34,9 @@ const C = {
   btnPrimary: 'cursor-pointer rounded-full border-[1.5px] border-accent bg-accent px-4 py-2 text-[14.5px] font-semibold text-on-accent transition-transform active:scale-[.97] disabled:cursor-not-allowed disabled:opacity-45',
   spin: 'inline-block h-4 w-4 flex-none animate-spin rounded-full border-2 border-line border-t-accent',
   link: 'w-max cursor-pointer text-[13.5px] text-muted underline underline-offset-4 hover:text-ink',
+  keyLink: 'inline-flex flex-none items-center gap-1 rounded-full bg-accent-soft px-2.5 py-1 text-[12.5px] font-semibold text-accent transition-transform active:scale-[.97]',
 };
+const EXT = '<svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 3.5h-3v9h9v-3M9 2.5h4.5V7M13.5 2.5L7.5 8.5"/></svg>';
 
 export function createSettingsView({ root, toast, onSaved }) {
   let cfg = null; // 服务器返回的当前配置（含各平台保存的配置）
@@ -42,6 +49,7 @@ export function createSettingsView({ root, toast, onSaved }) {
   let loadErr = '';
   let showKey = false;
   let chipTarget = null; // 点模型名时填进哪个输入框（最后点过的那个）
+  let touched = false; // 进入页面后动过表单：后台刷新时不重画表单，免得把正在填的内容冲掉
 
   /** 某个平台的表单：没保存的修改 → 保存过的配置 → 平台默认值 */
   function formFor(id) {
@@ -54,19 +62,42 @@ export function createSettingsView({ root, toast, onSaved }) {
     return { preset: id, baseUrl: p?.baseUrl || '', apiKey: '', mainModel: p?.main || '', lightModel: p?.light || '', jsonMode: true, thinking: false };
   }
 
-  async function open() {
-    loadErr = '';
+  /** 读取配置和今天的用量；返回数据有没有变化（设置页据此决定要不要重新画） */
+  async function load() {
     try {
-      [cfg, usage] = await Promise.all([api.llmSettings(), api.usage().catch(() => null)]);
-      drafts = {};
-      fetched = {};
-      result = null;
-      chipTarget = null;
-      form = formFor(cfg.provider || null);
+      const [c, u] = await Promise.all([api.llmSettings(), api.usage().catch(() => null)]);
+      const first = !cfg;
+      const changed = first || Boolean(loadErr) || JSON.stringify([c, u]) !== JSON.stringify([cfg, usage]);
+      cfg = c;
+      usage = u;
+      loadErr = '';
+      if (first || !touched) form = formFor(cfg.provider || null);
+      return changed;
     } catch (e) {
+      if (cfg) return false; // 有上次读到的数据就继续显示它
+      const changed = loadErr !== e.message;
       loadErr = e.message;
+      return changed;
     }
-    render(true);
+  }
+
+  /** 每次进入设置页：丢掉上次没保存的修改，回到正在用的平台 */
+  function reset() {
+    drafts = {};
+    fetched = {};
+    result = null;
+    chipTarget = null;
+    touched = false;
+    busy = '';
+    if (cfg) form = formFor(cfg.provider || null);
+  }
+
+  /** 后台读到新数据：没动过表单就整张重画，动过就只更新上面的状态卡片 */
+  function refresh() {
+    if (!cfg || loadErr) return render(false);
+    if (!touched && !busy) return render(false);
+    const el = root.querySelector('#llmStatus');
+    if (el) el.outerHTML = statusHTML();
   }
 
   const nameOf = (id) => presetById(id)?.name || '这个平台';
@@ -92,7 +123,7 @@ export function createSettingsView({ root, toast, onSaved }) {
           <span>查词 <b class="font-mono font-medium text-ink">${usage.lookups}</b> / ${usage.limits.lookup}</span>
           <span>加练出题 <b class="font-mono font-medium text-ink">${usage.gens}</b> / ${usage.limits.generate}</span></div>`
       : '';
-    return `<div class="${C.card} flex flex-col gap-3 px-4 py-3.5">
+    return `<div id="llmStatus" class="${C.card} flex flex-col gap-3 px-4 py-3.5">
       <div class="flex items-start gap-3"><span class="mt-[7px] h-2.5 w-2.5 flex-none rounded-full ${dot}"></span>
         <div class="flex min-w-0 flex-col gap-0.5"><b class="text-[16px] [overflow-wrap:anywhere]">${esc(title)}</b><span class="text-[13.5px] text-muted">${esc(sub)}</span></div></div>
       ${u}</div>`;
@@ -108,8 +139,29 @@ export function createSettingsView({ root, toast, onSaved }) {
     return `<button type="button" data-preset="${p.id}" aria-pressed="${form.preset === p.id}" class="inline-flex cursor-pointer items-center gap-1.5 rounded-full border-[1.5px] border-line bg-sheet px-3 py-1.5 text-[13.5px] aria-pressed:border-accent aria-pressed:bg-accent-soft aria-pressed:text-accent">${p.name}${mark}</button>`;
   }
 
-  function field(id, label, input, hint) {
-    return `<div class="flex flex-col gap-1.5"><label for="${id}" class="text-[14px] font-semibold">${label}</label>${input}${hint ? `<span class="text-[12.5px] text-muted">${hint}</span>` : ''}</div>`;
+  /** extra：放在标题右边的东西（比如申请密钥的链接） */
+  function field(id, label, input, hint, extra = '') {
+    const head = extra
+      ? `<div class="flex flex-wrap items-center gap-x-3 gap-y-1"><label for="${id}" class="text-[14px] font-semibold">${label}</label><span class="ml-auto">${extra}</span></div>`
+      : `<label for="${id}" class="text-[14px] font-semibold">${label}</label>`;
+    return `<div class="flex flex-col gap-1.5">${head}${input}${hint ? `<span class="text-[12.5px] text-muted">${hint}</span>` : ''}</div>`;
+  }
+
+  /** API 密钥标题右边：去这个平台申请密钥的链接（新窗口打开） */
+  function keyLinkHTML() {
+    const p = presetById(form.preset);
+    if (!p?.keyUrl) return '';
+    return `<a href="${esc(p.keyUrl)}" target="_blank" rel="noopener noreferrer" class="${C.keyLink}" title="打开 ${esc(p.keySite)} 的 API Key 页面">去${esc(p.keySite)}申请 ${EXT}</a>`;
+  }
+
+  function keyHint() {
+    const p = presetById(form.preset);
+    const how = p?.keyUrl
+      ? `没有密钥的话点右上角，登录${esc(p.keySite)}后创建一个 API Key，复制粘贴到这里。`.replace(/([\u4e00-\u9fff])([A-Za-z])|([A-Za-z])([\u4e00-\u9fff])/g, (m, a, b, c, d) => (a ? `${a} ${b}` : `${c} ${d}`))
+      : form.preset === 'custom'
+        ? '在你用的平台的控制台里创建 API Key，复制粘贴到这里。'
+        : '';
+    return `${how}只用于这个平台、只给你这个账户用。加密后保存在网站的数据库里，不会再发回浏览器。`;
   }
 
   function toggle(act, on, label, hint) {
@@ -152,7 +204,7 @@ export function createSettingsView({ root, toast, onSaved }) {
       return;
     }
     if (!cfg) {
-      root.innerHTML = `<div class="flex items-center gap-2 text-[14px] text-muted"><span class="${C.spin}"></span>正在读取设置…</div>`;
+      root.innerHTML = '';
       return;
     }
     const list = suggestions();
@@ -168,7 +220,7 @@ export function createSettingsView({ root, toast, onSaved }) {
         <div class="flex flex-wrap gap-1.5">${PRESETS.map(presetChip).join('')}</div>
         <span class="text-[12.5px] text-muted">每个平台的密钥和模型分开保存，点一下就能切换。绿点表示已经保存过密钥。</span></div>
       ${field('llmBaseUrl', '接口地址', `<input id="llmBaseUrl" name="baseUrl" type="url" inputmode="url" spellcheck="false" class="${C.input} font-mono text-[14px]" placeholder="https://…/v1" value="${esc(form.baseUrl)}">`, '兼容 OpenAI 格式的地址，填到 /v1 这一级。')}
-      ${field('llmKey', 'API 密钥', `<div class="flex gap-2"><input id="llmKey" name="apiKey" type="${showKey ? 'text' : 'password'}" spellcheck="false" autocomplete="new-password" class="${C.input} font-mono text-[14px]" placeholder="${esc(keyPlaceholder())}" value="${esc(form.apiKey)}"><button type="button" data-act="toggleKey" class="${C.btn} flex-none px-3 text-[13px]">${showKey ? '隐藏' : '显示'}</button></div>`, '只用于这个平台、只给你这个账户用。加密后保存在网站的数据库里，不会再发回浏览器。')}
+      ${field('llmKey', 'API 密钥', `<div class="flex gap-2"><input id="llmKey" name="apiKey" type="${showKey ? 'text' : 'password'}" spellcheck="false" autocomplete="new-password" class="${C.input} font-mono text-[14px]" placeholder="${esc(keyPlaceholder())}" value="${esc(form.apiKey)}"><button type="button" data-act="toggleKey" class="${C.btn} flex-none px-3 text-[13px]">${showKey ? '隐藏' : '显示'}</button></div>`, keyHint(), keyLinkHTML())}
       <datalist id="llmModels">${list.map((m) => `<option value="${esc(m)}"></option>`).join('')}</datalist>
       ${field('llmMain', '主力模型', `<input id="llmMain" name="mainModel" list="llmModels" spellcheck="false" class="${C.input} font-mono text-[14px]" placeholder="例如 deepseek-v4-pro" value="${esc(form.mainModel)}">`, '用于批改译文和出题，选能力强一些的。')}
       ${field('llmLight', '轻量模型（可选）', `<input id="llmLight" name="lightModel" list="llmModels" spellcheck="false" class="${C.input} font-mono text-[14px]" placeholder="留空就用主力模型" value="${esc(form.lightModel)}">`, '用于查词，选便宜、快的。')}
@@ -261,6 +313,7 @@ export function createSettingsView({ root, toast, onSaved }) {
   root.addEventListener('input', (e) => {
     const n = e.target.name;
     if (!form || !n || !(n in form)) return;
+    touched = true;
     form[n] = e.target.value;
     if (n === 'baseUrl') {
       const key = root.querySelector('#llmKey');
@@ -279,6 +332,7 @@ export function createSettingsView({ root, toast, onSaved }) {
   });
 
   root.addEventListener('click', (e) => {
+    if (e.target.closest('#llmForm')) touched = true;
     const p = e.target.closest('[data-preset]');
     if (p) {
       if (busy || p.dataset.preset === form.preset) return;
@@ -321,5 +375,5 @@ export function createSettingsView({ root, toast, onSaved }) {
     }
   });
 
-  return { open, render };
+  return { load, reset, refresh, render, hasData: () => Boolean(cfg) };
 }

@@ -5,8 +5,9 @@ import { esc, toks, plain, flat, phraseMap, trunkWords, diff, fmtDay, fmtTime, s
 import * as speech from './speech.js';
 import * as A from './anim.js';
 import { createSettingsView } from './settings.js';
-import { createTaskSettings, levelText } from './practice.js';
-import { createInvites, accountHTML } from './invites.js';
+import { createTaskSettings, levelText, autoOn, fmtAt } from './practice.js';
+import { createInvites, inviteEntryHTML, accountHTML } from './invites.js';
+import { confirmDialog } from './dialog.js';
 
 const $ = (id) => document.getElementById(id);
 const ls = {
@@ -78,7 +79,7 @@ let quizOpen = false;
 let grading = false;
 let gradeErr = '';
 let freshFb = false;
-let practiceCfg = { levels: ['CET-4', 'CET-6'], dailyCount: 5, maxDaily: 10, dailyAt: '7:50', autoDaily: true };
+let practiceCfg = { levels: ['CET-4', 'CET-6'], dailyCount: 5, maxDaily: 10, dailyAt: '07:50', autoDaily: true, serverDaily: true };
 let showDone = false; // 今日任务全部完成时，练习页显示完成页（点开某一句复习时关掉）
 let taskBusy = ''; // daily | extra：正在生成
 let taskBusyN = 0;
@@ -714,17 +715,13 @@ function renderViews() {
   // 要等知道是哪个账户之后再打开设置页（刷新时停在设置页的情况）
   if (view === 'settings' && !settingsOpened && me) {
     settingsOpened = true;
-    taskSettings.open();
-    // 邀请码管理只有你自己（访问密码登录）看得到；模型设置每个账户都有，各填各的
-    if (me?.role === 'owner') invitesView.open();
-    else $('inviteSettings').innerHTML = '';
-    settingsView.open();
-    $('accountSettings').innerHTML = me ? accountHTML(me) : '';
+    openSettings();
   }
 }
 
 function showView(name) {
   if (name === 'practice' && view !== 'practice' && taskInfo().complete) showDone = true;
+  if (view === 'settings' && name !== 'settings') leaveInvites();
   view = name;
   ui.view = view;
   saveUI();
@@ -1079,7 +1076,7 @@ function renderTask() {
     body = taskBusy
       ? busyHTML()
       : aiOk()
-        ? `<p class="m-0 text-[14.5px]">今天的 ${practiceCfg.dailyCount} 句还没生成。${practiceCfg.autoDaily ? `每天 ${esc(practiceCfg.dailyAt)} 会自动生成，` : ''}也可以现在生成。</p>
+        ? `<p class="m-0 text-[14.5px]">今天的 ${practiceCfg.dailyCount} 句还没生成。${autoOn(practiceCfg) ? `每天 ${esc(fmtAt(practiceCfg.dailyAt))} 会自动生成，` : ''}也可以现在生成。</p>
           <div class="${C.row}"><button class="${C.btnPrimary}" data-act="genDaily">现在生成今天的 ${practiceCfg.dailyCount} 句</button></div>`
         : `<p class="m-0 text-[14.5px]">还没配置 AI 模型，没法生成今天的句子。</p><div class="${C.row}"><button class="${C.btnPrimary}" data-act="taskSettings">去设置模型</button></div>`;
   } else {
@@ -1153,7 +1150,7 @@ function renderDone(enter) {
         })
         .join('')}
     </section>
-    <p class="m-0 text-center text-[13px] text-muted">${practiceCfg.autoDaily ? `明天 ${esc(practiceCfg.dailyAt)} 会自动准备新的 ${practiceCfg.dailyCount} 句。` : ''}<button class="cursor-pointer text-accent underline underline-offset-4" data-act="taskSettings">调整每日任务</button></p>`;
+    <p class="m-0 text-center text-[13px] text-muted">${autoOn(practiceCfg) ? `明天 ${esc(fmtAt(practiceCfg.dailyAt))} 会自动准备新的 ${practiceCfg.dailyCount} 句。` : ''}<button class="cursor-pointer text-accent underline underline-offset-4" data-act="taskSettings">调整每日任务</button></p>`;
   if (enter || celebrate) A.enter(el.children);
   if (celebrate) {
     celebrate = false;
@@ -1309,7 +1306,9 @@ $('lockForm').addEventListener('submit', async (e) => {
 // ---------- 事件 ----------
 $('views').addEventListener('click', (e) => {
   const b = e.target.closest('[data-view]');
-  if (b && b.dataset.view !== view) showView(b.dataset.view);
+  if (!b) return;
+  if (b.dataset.view !== view) showView(b.dataset.view);
+  else if (view === 'settings' && invitesOpen) closeInvites(); // 在邀请码页上点“设置”回到设置主页
 });
 $('bank').addEventListener('click', (e) => {
   const b = e.target.closest('[data-sid]');
@@ -1575,25 +1574,23 @@ document.addEventListener('visibilitychange', () => {
 setInterval(checkNewSentences, 10 * 60 * 1000);
 
 // ---------- 设置页 ----------
+// 设置主页有几块：每日任务、邀请码入口（只有你自己）、模型设置、账户。
+// 第一次进入时几块的数据一起读好再一起显示、只播一次进场动画；之后再进入先显示上次读到的，
+// 后台读到新数据再悄悄更新（不再播动画），所以不会一块一块地闪出来。
 const taskSettings = createTaskSettings({
   root: $('taskSettings'),
   toast,
+  role: () => me?.role,
   onChange: (p) => {
     practiceCfg = p;
     renderTask();
   },
 });
-const invitesView = createInvites({ root: $('inviteSettings'), toast });
-$('accountSettings').addEventListener('click', async (e) => {
-  const b = e.target.closest('[data-act="logout"]');
-  if (!b) return;
-  b.disabled = true;
-  try {
-    await api.lock();
-  } catch {
-    // 退出失败也照样回到登录页
-  }
-  location.reload();
+const invitesView = createInvites({
+  root: $('settingsInvites'),
+  toast,
+  onBack: () => closeInvites(),
+  onChange: () => renderInviteEntry(),
 });
 const settingsView = createSettingsView({
   root: $('llmSettings'),
@@ -1603,6 +1600,157 @@ const settingsView = createSettingsView({
     if (cur && step === 3) renderPanel(false);
     renderTask();
   },
+});
+
+const isOwner = () => me?.role === 'owner';
+let settingsSeq = 0;
+let invitesOpen = false; // 正在看邀请码管理页
+let invitesPushed = false; // 打开邀请码页时往浏览器历史里加了一条（手机上的返回手势能回到设置主页）
+
+function renderInviteEntry() {
+  $('inviteEntry').innerHTML = isOwner() ? inviteEntryHTML(invitesView.summary()) : '';
+}
+
+/** 设置主页上要显示的几块（不含邀请码页） */
+function settingsCards() {
+  return ['taskSettings', 'inviteEntry', 'llmSettings', 'accountSettings'].map($).filter((el) => el.firstElementChild);
+}
+
+function renderSettingsMain(enter) {
+  taskSettings.render();
+  renderInviteEntry();
+  settingsView.render();
+  $('accountSettings').innerHTML = me ? accountHTML(me) : '';
+  $('settingsLoading').classList.add('hidden');
+  $('settingsLoading').classList.remove('flex');
+  if (enter) A.enter(settingsCards());
+}
+
+async function openSettings() {
+  const seq = ++settingsSeq;
+  settingsView.reset();
+  invitesView.reset();
+  // 邀请码管理只有你自己（访问密码登录）看得到；模型设置每个账户都有，各填各的
+  const parts = [taskSettings, settingsView, ...(isOwner() ? [invitesView] : [])];
+  const cached = parts.every((p) => p.hasData());
+  const wantInvites = isOwner() && (invitesOpen || location.hash === '#invites');
+  showSettingsPage(wantInvites ? 'invites' : 'main');
+  if (cached) {
+    renderSettingsMain(!wantInvites);
+    if (wantInvites) invitesView.render(true);
+  } else {
+    ['taskSettings', 'inviteEntry', 'llmSettings', 'accountSettings'].forEach((id) => ($(id).innerHTML = ''));
+    $('settingsLoading').classList.remove('hidden');
+    $('settingsLoading').classList.add('flex');
+    if (wantInvites) invitesView.render();
+  }
+  const changed = await Promise.all(parts.map((p) => p.load()));
+  if (seq !== settingsSeq || view !== 'settings') return;
+  if (!cached) {
+    renderSettingsMain(!invitesOpen);
+    if (invitesOpen) invitesView.render(true);
+    return;
+  }
+  // 再次进入：只更新有变化的那几块，不播动画；正在改的那块先不动
+  if (changed[0] && !taskSettings.editing()) taskSettings.render();
+  if (changed[1]) settingsView.refresh();
+  if (changed[2]) {
+    renderInviteEntry();
+    if (invitesOpen) invitesView.render();
+  }
+}
+
+/** 设置页里切换“主页 / 邀请码管理页” */
+function showSettingsPage(page) {
+  invitesOpen = page === 'invites';
+  $('settingsMain').classList.toggle('hidden', invitesOpen);
+  $('settingsMain').classList.toggle('flex', !invitesOpen);
+  $('settingsInvites').classList.toggle('hidden', !invitesOpen);
+  $('settingsInvites').classList.toggle('flex', invitesOpen);
+}
+
+function openInvites() {
+  if (!isOwner()) return;
+  if (location.hash !== '#invites') {
+    history.pushState({ page: 'invites' }, '', '#invites');
+    invitesPushed = true;
+  }
+  showSettingsPage('invites');
+  invitesView.render(true);
+  window.scrollTo({ top: 0 });
+  // 进来时顺便刷新一下列表（设置主页读到的可能是几分钟前的）
+  invitesView.load().then((changed) => {
+    if (changed && invitesOpen) invitesView.render();
+    if (changed) renderInviteEntry();
+  });
+}
+
+/** 邀请码页上点“← 设置”：有自己加的历史记录就退回去（和手机返回手势一样），否则直接切回 */
+function closeInvites() {
+  if (invitesPushed && location.hash === '#invites') {
+    history.back();
+    return;
+  }
+  history.replaceState(null, '', location.pathname + location.search);
+  backToSettingsMain();
+}
+
+function backToSettingsMain() {
+  invitesPushed = false;
+  invitesView.reset();
+  showSettingsPage('main');
+  A.enter(settingsCards());
+  window.scrollTo({ top: 0 });
+}
+
+/** 切到别的页（练习、记录）时离开邀请码页，去掉地址栏里的 #invites */
+function leaveInvites() {
+  if (!invitesOpen && location.hash !== '#invites') return;
+  invitesOpen = false;
+  invitesPushed = false;
+  invitesView.reset();
+  showSettingsPage('main');
+  if (location.hash === '#invites') history.replaceState(null, '', location.pathname + location.search);
+}
+
+window.addEventListener('popstate', () => {
+  const want = location.hash === '#invites' && isOwner();
+  if (want && view !== 'settings') {
+    invitesOpen = true;
+    showView('settings');
+    return;
+  }
+  if (view !== 'settings') return;
+  if (want && !invitesOpen) {
+    showSettingsPage('invites');
+    invitesView.render(true);
+    window.scrollTo({ top: 0 });
+  } else if (!want && invitesOpen) backToSettingsMain();
+});
+
+$('inviteEntry').addEventListener('click', (e) => {
+  if (e.target.closest('[data-act="openInvites"]')) openInvites();
+});
+
+$('accountSettings').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-act="logout"]');
+  if (!b) return;
+  const sure = await confirmDialog({
+    title: '退出登录？',
+    body: isOwner()
+      ? '退出后要重新输入访问密码才能进来。练习记录都保存在服务器上，不会丢。'
+      : '退出后要重新输入邀请码才能进来。练习记录都保存在服务器上，不会丢；在这台设备上重新登录也不会多占设备名额。',
+    ok: '退出登录',
+    danger: true,
+  });
+  if (!sure) return;
+  b.disabled = true;
+  try {
+    await api.lock();
+  } catch {
+    // 退出失败也照样回到登录页
+  }
+  location.replace(location.pathname + location.search);
 });
 
 // ---------- 启动 ----------
@@ -1633,6 +1781,11 @@ api
   .then((s) => {
     if (s.unlocked) {
       me = s;
+      // 地址带着 #invites（在邀请码页上刷新）：你自己就回到邀请码页，别的账户去掉它
+      if (location.hash === '#invites') {
+        if (s.role === 'owner') view = 'settings';
+        else history.replaceState(null, '', location.pathname + location.search);
+      }
       start();
     } else showLock(true);
   })

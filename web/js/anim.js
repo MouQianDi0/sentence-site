@@ -205,3 +205,16 @@ export function fadeOut(el, done) {
   if (!on) return done();
   gsap.to(el, { autoAlpha: 0, duration: 0.3, onComplete: done });
 }
+
+/** 确认框：背景淡入，卡片从下面弹上来 */
+export function dialogIn(backdrop, panel) {
+  if (!on) return;
+  gsap.from(backdrop, { autoAlpha: 0, duration: 0.2, ease: 'power1.out', clearProps: 'opacity,visibility' });
+  gsap.from(panel, { y: 24, scale: 0.97, autoAlpha: 0, duration: 0.32, ease: 'back.out(1.6)', clearProps: 'transform,opacity,visibility' });
+}
+
+export function dialogOut(backdrop, panel, done) {
+  if (!on) return done();
+  gsap.to(panel, { y: 16, autoAlpha: 0, duration: 0.18, ease: 'power2.in' });
+  gsap.to(backdrop, { autoAlpha: 0, duration: 0.2, ease: 'power1.in', onComplete: done });
+}

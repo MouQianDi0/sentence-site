@@ -309,15 +309,54 @@ test('难度分配：只选一种全是它，两种都选各占一半', () => {
 });
 
 test('每日任务设置：默认值、校验、保存后重启还在', async () => {
+  const base = { maxDaily: 10, serverDaily: true };
   let r = await app.api('GET', '/api/settings/practice');
-  assert.deepEqual(r.body, { levels: ['CET-4'], dailyCount: 5, maxDaily: 10, dailyAt: '7:50', autoDaily: true });
-  for (const bad of [{ dailyCount: 11 }, { dailyCount: 0 }, { dailyCount: 2.5 }, { levels: [] }, { levels: ['CET-8'] }]) {
+  assert.deepEqual(r.body, { levels: ['CET-4'], dailyCount: 5, autoDaily: true, dailyAt: '07:50', ...base });
+  const bads = [{ dailyCount: 11 }, { dailyCount: 0 }, { dailyCount: 2.5 }, { levels: [] }, { levels: ['CET-8'] },
+    { dailyAt: '24:00' }, { dailyAt: '7:5' }, { dailyAt: 750 }, { autoDaily: 'no' }];
+  for (const bad of bads) {
     assert.equal((await app.api('PUT', '/api/settings/practice', bad)).status, 400, JSON.stringify(bad));
   }
   r = await app.api('PUT', '/api/settings/practice', { levels: ['CET-6', 'CET-4'], dailyCount: 7 });
-  assert.deepEqual(r.body, { levels: ['CET-4', 'CET-6'], dailyCount: 7, maxDaily: 10, dailyAt: '7:50', autoDaily: true });
+  assert.deepEqual(r.body, { levels: ['CET-4', 'CET-6'], dailyCount: 7, autoDaily: true, dailyAt: '07:50', ...base });
+  // 自己设时间（7:05 存成 07:05）、关掉自动生成；只改一项时其它不变
+  r = await app.api('PUT', '/api/settings/practice', { dailyAt: '7:05' });
+  assert.equal(r.body.dailyAt, '07:05');
+  r = await app.api('PUT', '/api/settings/practice', { autoDaily: false });
+  assert.deepEqual(r.body, { levels: ['CET-4', 'CET-6'], dailyCount: 7, autoDaily: false, dailyAt: '07:05', ...base });
   const p2 = createPractice(cfg);
   assert.equal(p2.get(await repo.getAccount('owner')).dailyCount, 7);
+  assert.equal(p2.get(await repo.getAccount('owner')).dailyAt, '07:05');
+  // .env 关掉每日出题时告诉页面
+  assert.equal(createPractice(loadConfig({ DAILY_GENERATE: '0' })).get({}).serverDaily, false);
+  await app.api('PUT', '/api/settings/practice', { autoDaily: true, dailyAt: '07:50' });
+});
+
+test('每日自动出题：到了账户自己设的时间才出，关掉就不出，错过了会补上', async () => {
+  const { createDailyRunner } = await import('../src/daily.js');
+  const practice = createPractice(cfg);
+  const calls = [];
+  const fakeAi = { generate: async (acc, o) => (calls.push({ id: acc.id, ...o }), ['x']) };
+  let clock = new Date('2030-01-02T01:29:00Z'); // 北京时间 09:29
+  const runner = createDailyRunner({ ai: fakeAi, llmFor: async () => ({ ready: () => true }), practice, log: quiet, now: () => clock });
+  await app.api('PUT', '/api/settings/practice', { autoDaily: true, dailyAt: '09:30', dailyCount: 3 });
+  await runner.tick();
+  assert.equal(calls.length, 0, '还没到 9:30');
+  clock = new Date('2030-01-02T01:30:00Z');
+  await runner.tick();
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].n, 3);
+  await runner.tick();
+  assert.equal(calls.length, 1, '一天只出一次');
+  // 第二天：关掉自动生成就不出；打开后时间已经过了，马上补上
+  clock = new Date('2030-01-03T02:00:00Z'); // 北京时间 10:00
+  await app.api('PUT', '/api/settings/practice', { autoDaily: false });
+  await runner.tick();
+  assert.equal(calls.length, 1);
+  await app.api('PUT', '/api/settings/practice', { autoDaily: true, dailyAt: '08:00' });
+  await runner.tick();
+  assert.equal(calls.length, 2);
+  await app.api('PUT', '/api/settings/practice', { dailyAt: '07:50', dailyCount: 7 });
 });
 
 test('加练：四六级混合，超过 5 句分两次请求，句子打乱顺序', async () => {
