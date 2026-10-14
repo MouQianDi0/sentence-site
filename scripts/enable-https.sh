@@ -3,7 +3,7 @@
 #
 #   sudo bash scripts/enable-https.sh                    用服务器的公网 IP：https://公网IP:8443
 #                                                        （Let's Encrypt 的 IP 证书，每张 6 天有效，每 3 天自动续一次）
-#   sudo bash scripts/enable-https.sh --port 9443        换一个 HTTPS 端口（记在 .env 的 HTTPS_PORT 里，以后重新运行沿用）
+#   sudo bash scripts/enable-https.sh --port 8444        换一个 HTTPS 端口（记在 .env 的 HTTPS_PORT 里，以后重新运行沿用）
 #   sudo bash scripts/enable-https.sh --port 443         用标准端口，网址里就不用写端口了
 #   sudo bash scripts/enable-https.sh cet.example.com    以后有了备案好的域名（普通证书，90 天有效，自动续期）
 #   sudo bash scripts/enable-https.sh --off              撤掉 HTTPS，回到原来的 http://公网IP:8080
@@ -28,6 +28,15 @@ die() { echo "[https] 失败：$*" >&2; exit 1; }
 
 # 网址里的端口：443 不用写
 port_suffix() { [[ $1 == 443 ]] || printf ':%s' "$1"; }
+
+# Nginx 1.25.1 起 HTTP/2 改成单独的 http2 指令，listen 里写 http2 会报“已弃用”；更老的版本只认 listen 里的写法
+H2_LISTEN=" http2" H2_LINE=""
+if command -v nginx >/dev/null; then
+  v=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1 || true)
+  if [[ -n $v && $(printf '%s\n' 1.25.1 "$v" | sort -V | head -n1) == 1.25.1 ]]; then
+    H2_LISTEN="" H2_LINE=$'\n    http2 on;'
+  fi
+fi
 
 # ---- 生成服务器 Nginx 的配置 -----------------------------------------------------
 # $1 地址（IP 或域名）  $2 HTTPS 端口  $3 网站容器的本机端口
@@ -69,8 +78,8 @@ CONF
   cat <<CONF
 
 server {
-    listen ${port} ssl http2${def:+ default_server};
-    server_name ${host};
+    listen ${port} ssl${H2_LISTEN}${def:+ default_server};
+    server_name ${host};${H2_LINE}
 
     # 用 http:// 打开这个端口时，跳到 https://
     error_page 497 =301 ${url}\$request_uri;
@@ -120,8 +129,7 @@ server {
 CONF
 }
 
-# 给 GitHub Actions 检查配置用：只输出 HTTPS 阶段的配置，不动服务器
-#   --render 地址 HTTPS端口 本机端口 [以前的端口] [default]
+# 只看会生成什么配置，不动服务器：--render 地址 HTTPS端口 本机端口 [以前的端口] [default]
 if [[ ${1:-} == --render ]]; then
   render_https "${2:?地址}" "${3:-$DEFAULT_PORT}" "${4:-$INNER_PORT}" "${5:-}" "${6:-}"
   exit 0
@@ -155,6 +163,18 @@ is_ipv4() { [[ $1 =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; }
 reload_nginx() {
   nginx -t >/dev/null 2>&1 || { nginx -t || true; return 1; }
   systemctl reload nginx
+  # reload 不等新配置生效就返回，旧的 Nginx 进程还会再接一会儿请求（按旧配置回应），等一下
+  sleep 2
+}
+
+# 给一个没人占着的端口当建议
+free_port() {
+  local p
+  for p in 8443 8444 10443 18443 28443; do
+    [[ $p == "${1:-}" ]] && continue
+    [[ -z $(port_owner "$p") ]] && { echo "$p"; return; }
+  done
+  echo 18443
 }
 
 wait_healthy() {
@@ -169,9 +189,10 @@ wait_healthy() {
 conf_path() {
   local dump
   dump=$(nginx -T 2>/dev/null || true)
-  if grep -qE 'include\s+/etc/nginx/conf\.d/\*\.conf' <<<"$dump"; then
+  # 只认没被注释掉的 include
+  if grep -qE '^\s*include\s+/etc/nginx/conf\.d/\*\.conf' <<<"$dump"; then
     echo /etc/nginx/conf.d/sentence-site.conf
-  elif grep -qE 'include\s+/etc/nginx/sites-enabled/' <<<"$dump"; then
+  elif grep -qE '^\s*include\s+/etc/nginx/sites-enabled/' <<<"$dump"; then
     echo /etc/nginx/sites-enabled/sentence-site.conf
   else
     echo ""
@@ -231,14 +252,20 @@ PORT=${PORT:-$DEFAULT_PORT}
 [[ $PORT =~ ^[0-9]{1,5}$ ]] && ((PORT >= 1 && PORT <= 65535)) || die "端口“$PORT”不对，要写 1–65535 的数字"
 [[ $PORT == 80 ]] && die "HTTPS 不能用 80 端口（80 要留给证书验证和跳转）"
 [[ $PORT == "$INNER_PORT" ]] && die "HTTPS 端口不能和网站容器的本机端口 $INNER_PORT 一样"
-URL="https://$HOST$(port_suffix "$PORT")"
 
 ownerPort=$(port_owner "$PORT")
 if [[ -n $ownerPort && $ownerPort != nginx ]]; then
-  # 网站容器现在正在这个端口对外（比如 --port 8080）：下面会把它挪到本机 $INNER_PORT，端口就空出来了
-  [[ $ownerPort == docker-proxy && $PORT == "$CUR_PORT" && $CUR_BIND != 127.0.0.1 ]] \
-    || die "$PORT 端口被 $ownerPort 占用了，换一个：sudo bash scripts/enable-https.sh --port 9443"
+  if [[ $ownerPort == docker-proxy && $PORT == "$CUR_PORT" && $CUR_BIND != 127.0.0.1 ]]; then
+    : # 网站容器现在正在这个端口对外（比如 --port 8080）：下面会把它挪到本机 $INNER_PORT，端口就空出来了
+  elif [[ -z $PORT_ARG && -z $(env_get HTTPS_PORT) ]]; then
+    alt=$(free_port "$PORT")
+    log "$PORT 端口被 $ownerPort 占着，改用 $alt"
+    PORT=$alt
+  else
+    die "$PORT 端口被 $ownerPort 占用了，换一个：sudo bash scripts/enable-https.sh --port $(free_port "$PORT")"
+  fi
 fi
+URL="https://$HOST$(port_suffix "$PORT")"
 ownerInner=$(port_owner "$INNER_PORT")
 [[ -z $ownerInner || $ownerInner == docker-proxy || $CUR_PORT == "$INNER_PORT" ]] \
   || die "$INNER_PORT 端口被 $ownerInner 占用了，换一个：sudo INNER_PORT=8082 bash scripts/enable-https.sh"
@@ -251,7 +278,7 @@ others=$(nginx -T 2>/dev/null | awk -v me="$CONF" '/^# configuration file /{f=$4
   | grep -E "^\s*listen\s+(\S*:)?${PORT}([ ;]|$)" || true)
 if [[ $MODE == ip && -n $others ]]; then
   if grep -q default_server <<<"$others"; then
-    die "服务器 Nginx 里已经有别的网站是 $PORT 端口的默认网站，IP 证书没法和它共存。换个端口：sudo bash scripts/enable-https.sh --port 9443"
+    die "服务器 Nginx 里已经有别的网站是 $PORT 端口的默认网站，IP 证书没法和它共存。换个端口：sudo bash scripts/enable-https.sh --port $(free_port "$PORT")"
   fi
   DEFAULT_SERVER=1
 fi
@@ -273,11 +300,26 @@ if [[ ! -s $SSL_DIR/fullchain.pem ]]; then
   render_http "$HOST" "$CUR_PORT" > "$CONF"
   reload_nginx || { restore; die "Nginx 配置检查没通过，已经恢复原样"; }
 fi
+nginx -T 2>/dev/null | grep -qF "# configuration file $CONF:" \
+  || { restore; die "服务器 Nginx 没有读 $CONF，请把 sudo nginx -T | head -40 的输出发给 Claude"; }
+
+# 像 Let's Encrypt 那样从 80 端口取一个验证文件（多试几次，等 Nginx 换好配置）
 token="sentence-site-check-$RANDOM$RANDOM"
 echo "$token" > "$WEBROOT/.well-known/acme-challenge/$token"
-got=$(curl -fsS -m 5 -H "Host: $HOST" "http://127.0.0.1/.well-known/acme-challenge/$token" 2>/dev/null || true)
+got=""
+for _ in 1 2 3 4 5; do
+  got=$(curl -sS -m 5 -w '\n（HTTP %{http_code}）' -H "Host: $HOST" "http://127.0.0.1/.well-known/acme-challenge/$token" 2>&1 || true)
+  [[ ${got%%$'\n'*} == "$token" ]] && break
+  sleep 1
+done
 rm -f "$WEBROOT/.well-known/acme-challenge/$token"
-[[ $got == "$token" ]] || { restore; die "80 端口上的验证文件访问不到，看一下 sudo nginx -T"; }
+if [[ ${got%%$'\n'*} != "$token" ]]; then
+  restore
+  echo "[https] 从 http://127.0.0.1/.well-known/acme-challenge/…（Host: $HOST）拿到的是：" >&2
+  head -c 300 <<<"$got" >&2
+  echo >&2
+  die "80 端口上的验证文件访问不到，已经恢复原样。请把上面几行和 sudo nginx -T 的输出发给 Claude"
+fi
 log "80 端口的验证路径正常"
 
 # ---- 2. 安装 acme.sh ---------------------------------------------------------------
@@ -337,12 +379,13 @@ if ! reload_nginx; then
 fi
 
 # ---- 6. 检查 -----------------------------------------------------------------------
-sleep 1
-if curl -fsS -m 10 --connect-to "$HOST:$PORT:127.0.0.1:$PORT" "$URL/api/health" | grep -q '"db":true'; then
-  log "HTTPS 检查通过，证书有效"
-else
-  die "HTTPS 检查没通过：curl -v --connect-to $HOST:$PORT:127.0.0.1:$PORT $URL/api/health"
-fi
+ok=""
+for _ in 1 2 3 4 5; do
+  curl -fsS -m 10 --connect-to "$HOST:$PORT:127.0.0.1:$PORT" "$URL/api/health" 2>/dev/null | grep -q '"db":true' && ok=1 && break
+  sleep 1
+done
+[[ -n $ok ]] || die "HTTPS 检查没通过：curl -v --connect-to $HOST:$PORT:127.0.0.1:$PORT $URL/api/health"
+log "HTTPS 检查通过，证书有效"
 code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -H "Host: $HOST" http://127.0.0.1/ || true)
 [[ $code == 301 ]] && log "http://$HOST 会跳到 $URL"
 

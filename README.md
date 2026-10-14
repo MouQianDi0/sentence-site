@@ -57,7 +57,7 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 
 ```bash
 sudo bash scripts/enable-https.sh                    # 用公网 IP：https://公网IP:8443
-sudo bash scripts/enable-https.sh --port 9443        # 换个 HTTPS 端口（443 没被别的网站占着时可以 --port 443，网址就不用带端口）
+sudo bash scripts/enable-https.sh --port 8444        # 换个 HTTPS 端口（443 没被别的网站占着时可以 --port 443，网址就不用带端口）
 sudo bash scripts/enable-https.sh cet.example.com    # 以后有了备案好的域名就换成域名（会再申请一张域名证书）
 sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 http://公网IP:8080
 ```
@@ -93,7 +93,7 @@ sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 htt
 | 要做的事 | 命令 |
 | --- | --- |
 | 看后端日志 | `sudo docker compose logs -f api` |
-| 开 HTTPS / 换 HTTPS 端口 / 撤掉 HTTPS | `sudo bash scripts/enable-https.sh` / `… --port 9443` / `… --off` |
+| 开 HTTPS / 换 HTTPS 端口 / 撤掉 HTTPS | `sudo bash scripts/enable-https.sh` / `… --port 8444` / `… --off` |
 | 改了 `.env` 后生效 | `sudo docker compose up -d --force-recreate api` |
 | 立即更新到 GitHub 上的最新代码 | `sudo sentence-update` |
 | 看自动更新日志 | `sudo tail -n 30 /var/log/sentence-site-update.log` |
