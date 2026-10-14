@@ -1,0 +1,49 @@
+{
+  "name": "sentence-site",
+  "version": "1.0.0",
+  "private": true,
+  "description": "长难句拆解台：四六级长难句练习网站",
+  "license": "MIT",
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "api",
+    "web"
+  ],
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "dev": "npm run dev -w @sentence-site/web",
+    "dev:api": "npm run dev -w @sentence-site/api",
+    "dev:demo": "npm run demo -w @sentence-site/api",
+    "build": "npm run build -w @sentence-site/web",
+    "test": "npm test -w @sentence-site/api",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm test && npm run build",
+    "prepare": "husky || true"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/node": "^22.18.0",
+    "eslint": "^9.39.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^16.4.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.2.0",
+    "prettier": "^3.6.2",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.46.0"
+  },
+  "lint-staged": {
+    "*.{ts,js}": [
+      "eslint --fix --no-warn-ignored",
+      "prettier --write"
+    ],
+    "*.{json,css,html,yml,yaml}": "prettier --write"
+  }
+}

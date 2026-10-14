@@ -1,0 +1,7 @@
+# 本地开发：只起数据库，并把端口开到本机，配合 npm run dev:api 和 npm run dev 使用
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db
+# .env 里把 DB_HOST 设成 127.0.0.1（服务器上不要用这个文件）
+services:
+  db:
+    ports:
+      - '127.0.0.1:5432:5432'

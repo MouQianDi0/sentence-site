@@ -1,0 +1,22 @@
+{
+  "name": "@sentence-site/web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "长难句拆解台 · 前端",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.node.json"
+  },
+  "dependencies": {
+    "@sentence-site/shared": "*",
+    "gsap": "^3.13.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.1.14",
+    "tailwindcss": "^4.1.14",
+    "vite": "^7.1.0"
+  }
+}

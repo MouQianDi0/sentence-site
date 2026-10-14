@@ -1,0 +1,32 @@
+// 出题规范：读 skills/sentence-spec/SKILL.md，按 <!-- prompt:名字 --> … <!-- /prompt --> 取出各段，原样放进提示词。
+// 规范文件缺失或少了某一段时直接报错，服务起不来，自动更新会退回上一个版本。
+import fs from 'node:fs';
+
+export const SPEC_FILE = new URL('../skills/sentence-spec/SKILL.md', import.meta.url);
+const NEEDED = ['predicates', 'segments', 'kb', 'trunk', 'fields', 'example'] as const;
+export type SpecSection = (typeof NEEDED)[number];
+
+export function parseSpec(text: string): Record<SpecSection, string> {
+  const out: Record<string, string> = {};
+  const re = /<!-- prompt:([a-z]+) -->\r?\n([\s\S]*?)<!-- \/prompt -->/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) out[m[1] ?? ''] = (m[2] ?? '').trim();
+  const missing = NEEDED.filter((k) => !out[k]);
+  if (missing.length) throw new Error(`出题规范 SKILL.md 里缺少这些段：${missing.join(', ')}`);
+  return out as Record<SpecSection, string>;
+}
+
+const SECTIONS = parseSpec(fs.readFileSync(SPEC_FILE, 'utf8'));
+
+/** 取规范里的一段文字 */
+export const spec = (name: SpecSection): string => SECTIONS[name];
+
+/** 规范“知识点”一段列出的键（- key：说明） */
+export const specKbKeys = (): string[] => [...SECTIONS.kb.matchAll(/^- ([a-z_]+)：/gm)].map((m) => m[1] ?? '');
+
+/** 规范里的完整示例句子（JSON） */
+export const specExample = (): unknown => {
+  const m = /```json\s*([\s\S]*?)```/.exec(SECTIONS.example);
+  if (!m) throw new Error('出题规范的示例一段里没有 JSON');
+  return JSON.parse(m[1] ?? '');
+};

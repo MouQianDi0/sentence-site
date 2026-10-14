@@ -1,0 +1,13 @@
+# 镜像构建的上下文是仓库根目录；这些不需要发给 Docker
+**/node_modules
+**/dist
+.git
+.github
+.husky
+.claude
+.env
+data
+backups
+api/test
+*.md
+!api/skills/**/*.md

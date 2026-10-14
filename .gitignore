@@ -2,3 +2,5 @@
 data/
 backups/
 node_modules/
+dist/
+*.tsbuildinfo

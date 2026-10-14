@@ -2,20 +2,25 @@
 
 四六级长难句练习网站：圈谓语 → 看结构（成分颜色 + 从句知识点）→ 翻译（AI 批改 + 选译文），带点词查义、朗读、学习记录和每日任务。
 
-- 前端：原生 JS 模块 + Tailwind CSS v4（已编译好 `web/css/app.css`）+ GSAP 动画，不需要构建
-- 后端：Node.js 22，唯一依赖是 `pg`；AI 走任何兼容 OpenAI 接口格式的国内大模型
+- 前端：TypeScript + Vite 构建，Tailwind CSS v4 + GSAP 动画
+- 后端：TypeScript，Node.js 22 直接运行（Node 自带的类型擦除，不用先编译），唯一运行依赖是 `pg`；AI 走任何兼容 OpenAI 接口格式的国内大模型
+- 前后端共用的接口类型、句子文本工具、知识点放在 `shared/`
 - 数据库：PostgreSQL 16
-- 部署：Docker Compose（db / api / web 三个容器）
+- 部署：Docker Compose（db / api / web 三个容器，api 和 web 的镜像在服务器上构建）
+- 工程化：npm workspaces、ESLint、Prettier、TypeScript 严格模式、提交前自动检查（husky + lint-staged）、GitHub Actions
 
 ## 更新方式：GitHub 自动更新
 
-代码放在公开仓库 https://github.com/MouQianDi0/sentence-site 。服务器每 8 小时（0:20、8:20、16:20）检查一次，有新代码就自动部署；想马上更新就运行：
+代码放在公开仓库 https://github.com/MouQianDi0/sentence-site 。每次推送，GitHub Actions 都会检查代码格式、跑 ESLint、类型检查、后端测试、前端构建，再用 Docker 把整个网站起一遍（见 `.github/workflows/ci.yml`）。
+
+服务器每 8 小时（0:20、8:20、16:20）检查一次，有新代码、而且 GitHub 上的检查全部通过才自动部署；检查没通过或还没跑完时这次跳过。想马上更新就运行：
 
 ```bash
-sudo sentence-update
+sudo sentence-update            # 检查还在跑时最多等 10 分钟；没通过就不部署
+sudo sentence-update --force    # 不看检查结果，强制部署（出问题时临时用）
 ```
 
-更新只会改仓库里的文件，`.env`、`data/`（数据库）和 `backups/` 不会动。新版本启动失败（健康检查不通过）会自动退回上一个版本，定时任务也不会反复尝试这个失败的版本。更新日志：`sudo tail -n 30 /var/log/sentence-site-update.log`。关掉自动更新：`sudo rm /etc/cron.d/sentence-site-update`。
+更新只会改仓库里的文件，`.env`、`data/`（数据库）和 `backups/` 不会动。更新时在服务器上构建 api 和 web 两个镜像（npm 依赖走腾讯云镜像，可以在 `.env` 里用 `NPM_REGISTRY=` 换别的源）。新版本启动失败（健康检查不通过）会自动退回上一个版本，定时任务也不会反复尝试这个失败的版本。更新日志：`sudo tail -n 30 /var/log/sentence-site-update.log`。关掉自动更新：`sudo rm /etc/cron.d/sentence-site-update`。
 
 ### 第一次接入（已经用压缩包部署过的服务器，只需要做一次）
 
@@ -74,7 +79,7 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 | 立即更新到 GitHub 上的最新代码 | `sudo sentence-update` |
 | 看自动更新日志 | `sudo tail -n 30 /var/log/sentence-site-update.log` |
 | 手动备份数据库 | `sudo bash scripts/backup.sh` |
-| 导入旧页面导出的数据 | `sudo docker compose exec -T api node scripts/import.js < 导出文件.json` |
+| 导入旧页面导出的数据 | `sudo docker compose exec -T api node --experimental-strip-types scripts/import.ts < 导出文件.json` |
 | 停止网站 | `sudo docker compose down`（数据保留在 `data/postgres`） |
 
 ## 每日任务
@@ -109,7 +114,7 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 句子数据的所有规则写在一份文件里：[`api/skills/sentence-spec/SKILL.md`](api/skills/sentence-spec/SKILL.md)（Agent Skills 格式）。谓语怎么标、片段怎么切、知识点键怎么选、主干怎么写都以它为准：
 
 - 网站里的 AI：后端每次出题、复核谓语时，把文件里 `<!-- prompt:名字 -->` 标出的几段原样放进提示词。改了规则，更新部署后 AI 就按新规则出题，不用改代码。
-- 校验代码（`api/src/validate.js`、`api/src/predicates.js`）和页面知识点（`web/js/kb.js`）要和它保持一致，`npm test` 会核对知识点键和文件里的完整示例。
+- 校验代码（`api/src/validate.ts`、`api/src/predicates.ts`）和知识点（`shared/src/kb.ts`）要和它保持一致，`npm test` 会核对知识点键和文件里的完整示例。
 - 写代码的 agent：仓库根目录的 `.claude/skills/sentence-spec` 指向同一份文件，Claude Code 这类支持 Agent Skills 的工具改网站时会读到它；`AGENTS.md` 也指向这里。
 
 ## 接口
@@ -142,8 +147,40 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 | POST | /api/settings/llm/models | 获取平台的模型列表 |
 | GET | /api/health | 健康检查 |
 
+## 目录结构
+
+```
+shared/      前后端共用：接口数据类型（types.ts）、句子文本工具（text.ts）、知识点（kb.ts）
+api/         后端（TypeScript，Node 直接运行）
+  src/       接口、AI、数据库、每日出题；schema.sql 是建表语句
+  test/      测试（node --test）、本地演示服务器 devserver.ts
+  skills/    出题规范 SKILL.md
+web/         前端（Vite + TypeScript）
+  index.html 页面骨架
+  src/       main.ts 入口；practice/ 练习页；settings/ 设置页；lib/ 接口、动画、朗读等工具
+nginx/       Nginx 配置（构建前端镜像时打包进去）
+scripts/     服务器脚本：安装、自动更新、备份
+```
+
 ## 本地开发
 
-- 后端测试：`cd api && node --test test/*.test.js`。测试用本机的 `psql` 连 PostgreSQL（地址见 `api/test/helpers.js`），外加一个假的大模型接口，不需要装 npm 包。
-- 本地预览：`cd api && node test/devserver.js`，打开 http://127.0.0.1:3100 ，密码 `dev-password`。加上 `DEV_NO_LLM=1` 可以模拟还没配置模型，在设置页里用日志打印的假模型地址试一遍。
-- 改了页面里的 Tailwind 类名后重新生成 CSS：下载 [Tailwind CSS v4 独立命令行工具](https://github.com/tailwindlabs/tailwindcss/releases)，然后 `TAILWIND=/path/to/tailwindcss bash web/build-css.sh`。
+需要 Node.js 22.18 以上（能直接运行 `.ts`）。在仓库根目录：
+
+```bash
+npm install            # 第一次，或者 package.json 变了以后；会顺便装好提交前的检查
+npm run dev:demo       # 演示后端：假的大模型 + 本机 PostgreSQL，端口 3100，密码 dev-password
+API_URL=http://127.0.0.1:3100 npm run dev   # 另开一个终端：前端开发服务器 http://127.0.0.1:5173 ，改代码自动刷新
+```
+
+想连真的数据库和模型：`docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d db` 起一个数据库，`.env` 里把 `DB_HOST` 改成 `127.0.0.1`，然后 `npm run dev:api`（端口 3000）和 `npm run dev`。
+
+| 要做的事 | 命令 |
+| --- | --- |
+| 全部检查一遍（和 GitHub 上一样） | `npm run check` |
+| 后端测试 | `npm test`（测试用本机的 `psql` 连 PostgreSQL，地址见 `api/test/helpers.ts`，可以用 `TEST_PGHOST` 等环境变量改） |
+| 类型检查 | `npm run typecheck` |
+| 代码检查 / 自动修 | `npm run lint` / `npm run lint:fix` |
+| 格式化 | `npm run format` |
+| 构建前端 | `npm run build`（输出到 `web/dist`；`npm run dev:demo` 也会顺带提供它） |
+
+`git commit` 时会自动对改动的文件跑 ESLint 和 Prettier（husky + lint-staged）。Tailwind 的类名直接写在 `web/index.html` 和 `web/src` 里，Vite 构建时自动生成 CSS，不用再手动编译。演示服务器加上 `DEV_NO_LLM=1` 可以模拟还没配置模型。

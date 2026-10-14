@@ -1,159 +1,340 @@
 <!doctype html>
 <html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#eaeef4" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#10141b" media="(prefers-color-scheme: dark)">
-<title>长难句拆解台</title>
-<link rel="stylesheet" href="/css/app.css">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232a4bd1'/%3E%3Cpath d='M8 21h16M8 15h10M8 9h13' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E">
-</head>
-<body class="min-h-screen bg-paper text-ink font-zh text-[15px] leading-relaxed antialiased">
-
-<!-- 访问密码 -->
-<div id="lock" class="fixed inset-0 z-30 hidden items-start justify-center overflow-y-auto bg-paper px-4 py-8">
-  <form id="lockForm" class="my-auto w-full max-w-sm flex flex-col gap-4 rounded-2xl border border-line bg-sheet p-6">
-    <div class="flex flex-col gap-1">
-      <span class="font-mono text-[11.5px] tracking-[.12em] uppercase text-accent">CET-4 / 6 · 长难句</span>
-      <h1 class="font-head text-[26px] font-bold leading-tight">长难句拆解台</h1>
-      <p class="text-[14px] text-muted">输入访问密码或邀请码。输对一次，30 天内不用再输。</p>
-    </div>
-    <label for="lockInput" class="sr-only">访问密码或邀请码</label>
-    <input id="lockInput" type="password" autocomplete="current-password" required
-      class="w-full rounded-xl border-[1.5px] border-line bg-sheet px-3.5 py-2.5 text-[16px] outline-none transition-colors focus:border-accent"
-      placeholder="访问密码或邀请码">
-    <p id="lockErr" class="hidden rounded-lg bg-bad-soft px-3 py-2 text-[14px]" role="alert"></p>
-    <button id="lockBtn" type="submit" class="rounded-full bg-accent px-4 py-2.5 font-semibold text-on-accent transition-transform active:scale-[.98] disabled:opacity-50">进入</button>
-    <!-- 邀请码须知：对方第一次用邀请码登录前就能看到 -->
-    <section aria-labelledby="inviteNoticeTitle" class="flex flex-col gap-2 rounded-xl bg-raise px-3.5 py-3">
-      <h2 id="inviteNoticeTitle" class="m-0 flex items-center gap-1.5 text-[13.5px] font-semibold">
-        <svg class="h-4 w-4 flex-none text-accent" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 7.2v3.8M8 4.9v.1" stroke-linecap="round"/></svg>
-        用邀请码登录前请看
-      </h2>
-      <ul class="m-0 flex list-disc flex-col gap-1 pl-[1.15em] text-[13px] leading-[1.6] text-muted marker:text-line">
-        <li>一个邀请码对应一个独立账户，句库、练习记录和设置只有你自己看得到。大小写和中间的横线输不输都行。</li>
-        <li>每个邀请码只能在<b class="font-semibold text-ink">限定数量的设备</b>上登录（一般是 2 台）。换浏览器、清除浏览器数据或用无痕模式都算新设备，名额满了要找管理员移除旧设备。</li>
-        <li>AI 批改、查词和出题要用<b class="font-semibold text-ink">你自己的大模型 API 密钥</b>：登录后在“设置”里填好才能用，调用费用由你的模型平台账户承担。</li>
-        <li>请不要把邀请码转给别人，别人用它登录能看到你的全部记录，还会占掉你的设备名额。</li>
-        <li>管理员删除邀请码后，这个账户和里面的数据会一起删除，不能恢复。</li>
-      </ul>
-    </section>
-  </form>
-</div>
-
-<div id="app" class="mx-auto flex max-w-[720px] flex-col gap-4 px-4 pt-5 pb-14">
-  <header class="flex flex-wrap items-end justify-between gap-3">
-    <div class="flex min-w-0 flex-col gap-1">
-      <span class="font-mono text-[11.5px] tracking-[.12em] uppercase text-accent">CET-4 / 6 · 长难句</span>
-      <h1 class="font-head text-[25px] sm:text-[28px] font-bold leading-tight text-balance">长难句拆解台</h1>
-    </div>
-    <div id="views" role="tablist" class="relative grid min-w-[204px] grid-cols-3 rounded-full border border-line bg-sheet p-1">
-      <span id="viewInd" class="absolute inset-y-1 left-1 w-[calc((100%-8px)/3)] rounded-full bg-ink"></span>
-      <button role="tab" data-view="practice" class="relative z-10 cursor-pointer rounded-full px-3 py-1.5 text-[14px] text-muted transition-colors aria-selected:font-semibold aria-selected:text-paper">练习</button>
-      <button role="tab" data-view="records" class="relative z-10 cursor-pointer rounded-full px-3 py-1.5 text-[14px] text-muted transition-colors aria-selected:font-semibold aria-selected:text-paper">记录</button>
-      <button role="tab" data-view="settings" class="relative z-10 cursor-pointer rounded-full px-3 py-1.5 text-[14px] text-muted transition-colors aria-selected:font-semibold aria-selected:text-paper">设置</button>
-    </div>
-  </header>
-
-  <section id="viewPractice" class="flex flex-col gap-4">
-    <!-- 今日任务 -->
-    <section id="task" aria-label="今日任务" class="flex flex-col gap-3 rounded-2xl border border-line bg-sheet px-4 py-3.5"></section>
-
-    <!-- 句库 -->
-    <div class="flex flex-col gap-2">
-      <div class="flex flex-wrap items-center gap-2.5">
-        <span class="font-mono text-[11px] tracking-[.1em] uppercase text-muted">句库</span>
-        <span id="bankCount" class="text-[13px] text-muted"></span>
-      </div>
-      <div id="bank" class="relative flex gap-4 overflow-x-auto px-0.5 pt-1 pb-2"></div>
-    </div>
-
-    <!-- 今日任务完成 -->
-    <section id="doneView" class="hidden flex-col gap-4"></section>
-
-    <!-- 练习区：句子 + 三个步骤 -->
-    <div id="work" class="flex flex-col gap-4">
-    <section id="sheet" class="flex flex-col gap-2.5 rounded-2xl border border-line bg-sheet px-[18px] pt-4 pb-5 transition-shadow duration-200 data-[stuck]:shadow-[0_12px_28px_-14px_rgba(15,23,42,.45)]">
-      <!-- 图钉单独放在右上角；左边是句子信息和工具，窄屏时工具换到第二行 -->
-      <div class="flex items-start gap-2">
-      <div class="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-2">
-        <div class="flex min-h-[30px] min-w-0 flex-wrap items-center gap-2 font-mono text-[12px] tracking-[.03em] text-muted">
-          <span id="label"></span>
-          <span id="lvl" class="hidden rounded-full border border-line px-2"></span>
-          <span id="focus"></span>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#eaeef4" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#10141b" media="(prefers-color-scheme: dark)" />
+    <title>长难句拆解台</title>
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232a4bd1'/%3E%3Cpath d='M8 21h16M8 15h10M8 9h13' stroke='white' stroke-width='3' stroke-linecap='round'/%3E%3C/svg%3E"
+    />
+  </head>
+  <body class="min-h-screen bg-paper text-ink font-zh text-[15px] leading-relaxed antialiased">
+    <!-- 访问密码 -->
+    <div id="lock" class="fixed inset-0 z-30 hidden items-start justify-center overflow-y-auto bg-paper px-4 py-8">
+      <form
+        id="lockForm"
+        class="my-auto w-full max-w-sm flex flex-col gap-4 rounded-2xl border border-line bg-sheet p-6"
+      >
+        <div class="flex flex-col gap-1">
+          <span class="font-mono text-[11.5px] tracking-[.12em] uppercase text-accent">CET-4 / 6 · 长难句</span>
+          <h1 class="font-head text-[26px] font-bold leading-tight">长难句拆解台</h1>
+          <p class="text-[14px] text-muted">输入访问密码或邀请码。输对一次，30 天内不用再输。</p>
         </div>
-        <div id="tools" class="flex items-center gap-1.5">
-          <button id="speak" class="hidden cursor-pointer items-center gap-1.5 rounded-full border-[1.5px] border-line bg-sheet px-3 py-1 text-[13px]" aria-label="朗读整句">
-            <span class="inline-flex h-3 items-end gap-[2px]" aria-hidden="true"><i class="eq block h-full w-[2.5px] rounded-[1px] bg-current"></i><i class="eq block h-[70%] w-[2.5px] rounded-[1px] bg-current"></i><i class="eq block h-[85%] w-[2.5px] rounded-[1px] bg-current"></i></span>
-            <span id="speakTxt">朗读</span>
-          </button>
-          <button id="voiceBtn" class="hidden h-[30px] w-[30px] cursor-pointer items-center justify-center rounded-full border-[1.5px] border-line bg-sheet" aria-label="声音设置" aria-expanded="false">
-            <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 5h7M12 5h2M2 11h2M7 11h7"/><circle cx="10.5" cy="5" r="1.6"/><circle cx="5.5" cy="11" r="1.6"/></svg>
-          </button>
-          <button id="dict" aria-pressed="false" class="inline-flex cursor-pointer items-center disabled:cursor-default gap-1.5 rounded-full border-[1.5px] border-line bg-sheet px-3 py-1 text-[13px] aria-pressed:border-accent aria-pressed:bg-accent aria-pressed:text-on-accent">
-            <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 3.2c1.8-.6 3.7-.4 5.5.8 1.8-1.2 3.7-1.4 5.5-.8v9.3c-1.8-.6-3.7-.4-5.5.8-1.8-1.2-3.7-1.4-5.5-.8z"/><path d="M8 4v9.3"/></svg>查词
-          </button>
-          <button id="more" class="h-[30px] cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-2.5 text-[13px] text-muted" aria-label="删除这一句">删除</button>
-        </div>
-      </div>
-        <button id="pin" aria-pressed="false" class="inline-flex h-[30px] w-[30px] flex-none cursor-pointer items-center justify-center rounded-full border-[1.5px] border-line bg-sheet text-muted transition-colors aria-pressed:border-accent aria-pressed:bg-accent aria-pressed:text-on-accent" aria-label="把句子固定在屏幕顶部" title="固定句子">
-          <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 2h5M6.5 2v4L4.5 8.5h7L9.5 6V2M8 8.5V14"/></svg>
+        <label for="lockInput" class="sr-only">访问密码或邀请码</label>
+        <input
+          id="lockInput"
+          type="password"
+          autocomplete="current-password"
+          required
+          class="w-full rounded-xl border-[1.5px] border-line bg-sheet px-3.5 py-2.5 text-[16px] outline-none transition-colors focus:border-accent"
+          placeholder="访问密码或邀请码"
+        />
+        <p id="lockErr" class="hidden rounded-lg bg-bad-soft px-3 py-2 text-[14px]" role="alert"></p>
+        <button
+          id="lockBtn"
+          type="submit"
+          class="rounded-full bg-accent px-4 py-2.5 font-semibold text-on-accent transition-transform active:scale-[.98] disabled:opacity-50"
+        >
+          进入
         </button>
-      </div>
-      <div id="voicePanel" class="hidden flex-wrap items-center gap-2 rounded-xl bg-raise px-3 py-2.5 text-[13.5px]">
-        <label for="voiceSel" class="text-muted">声音</label>
-        <select id="voiceSel" class="min-w-0 flex-[1_1_180px] rounded-lg border-[1.5px] border-line bg-sheet px-2 py-1"></select>
-        <div id="rates" class="flex gap-1">
-          <button data-rate="0.75" class="cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-2.5 py-0.5 font-mono text-[12px] aria-pressed:border-accent aria-pressed:text-accent">慢</button>
-          <button data-rate="0.9" class="cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-2.5 py-0.5 font-mono text-[12px] aria-pressed:border-accent aria-pressed:text-accent">中</button>
-          <button data-rate="1.05" class="cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-2.5 py-0.5 font-mono text-[12px] aria-pressed:border-accent aria-pressed:text-accent">快</button>
+        <!-- 邀请码须知：对方第一次用邀请码登录前就能看到 -->
+        <section aria-labelledby="inviteNoticeTitle" class="flex flex-col gap-2 rounded-xl bg-raise px-3.5 py-3">
+          <h2 id="inviteNoticeTitle" class="m-0 flex items-center gap-1.5 text-[13.5px] font-semibold">
+            <svg
+              class="h-4 w-4 flex-none text-accent"
+              viewBox="0 0 16 16"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              aria-hidden="true"
+            >
+              <circle cx="8" cy="8" r="6.25" />
+              <path d="M8 7.2v3.8M8 4.9v.1" stroke-linecap="round" />
+            </svg>
+            用邀请码登录前请看
+          </h2>
+          <ul
+            class="m-0 flex list-disc flex-col gap-1 pl-[1.15em] text-[13px] leading-[1.6] text-muted marker:text-line"
+          >
+            <li>一个邀请码对应一个独立账户，句库、练习记录和设置只有你自己看得到。大小写和中间的横线输不输都行。</li>
+            <li>
+              每个邀请码只能在<b class="font-semibold text-ink">限定数量的设备</b>上登录（一般是 2
+              台）。换浏览器、清除浏览器数据或用无痕模式都算新设备，名额满了要找管理员移除旧设备。
+            </li>
+            <li>
+              AI 批改、查词和出题要用<b class="font-semibold text-ink">你自己的大模型 API 密钥</b
+              >：登录后在“设置”里填好才能用，调用费用由你的模型平台账户承担。
+            </li>
+            <li>请不要把邀请码转给别人，别人用它登录能看到你的全部记录，还会占掉你的设备名额。</li>
+            <li>管理员删除邀请码后，这个账户和里面的数据会一起删除，不能恢复。</li>
+          </ul>
+        </section>
+      </form>
+    </div>
+
+    <div id="app" class="mx-auto flex max-w-[720px] flex-col gap-4 px-4 pt-5 pb-14">
+      <header class="flex flex-wrap items-end justify-between gap-3">
+        <div class="flex min-w-0 flex-col gap-1">
+          <span class="font-mono text-[11.5px] tracking-[.12em] uppercase text-accent">CET-4 / 6 · 长难句</span>
+          <h1 class="font-head text-[25px] sm:text-[28px] font-bold leading-tight text-balance">长难句拆解台</h1>
         </div>
-      </div>
-      <p id="sentence" class="-mx-[3px] m-0 font-en text-[17.5px] sm:text-[19px] leading-[2.15] [overflow-wrap:anywhere]"></p>
-      <p id="hint" class="m-0 hidden truncate text-[12.5px] text-muted"></p>
-      <div id="wordCard"></div>
-    </section>
+        <div
+          id="views"
+          role="tablist"
+          class="relative grid min-w-[204px] grid-cols-3 rounded-full border border-line bg-sheet p-1"
+        >
+          <span id="viewInd" class="absolute inset-y-1 left-1 w-[calc((100%-8px)/3)] rounded-full bg-ink"></span>
+          <button
+            role="tab"
+            data-view="practice"
+            class="relative z-10 cursor-pointer rounded-full px-3 py-1.5 text-[14px] text-muted transition-colors aria-selected:font-semibold aria-selected:text-paper"
+          >
+            练习
+          </button>
+          <button
+            role="tab"
+            data-view="records"
+            class="relative z-10 cursor-pointer rounded-full px-3 py-1.5 text-[14px] text-muted transition-colors aria-selected:font-semibold aria-selected:text-paper"
+          >
+            记录
+          </button>
+          <button
+            role="tab"
+            data-view="settings"
+            class="relative z-10 cursor-pointer rounded-full px-3 py-1.5 text-[14px] text-muted transition-colors aria-selected:font-semibold aria-selected:text-paper"
+          >
+            设置
+          </button>
+        </div>
+      </header>
 
-    <!-- 三个步骤 -->
-    <div id="tabs" role="tablist" class="relative grid grid-cols-3 rounded-xl border border-line bg-sheet p-[5px]">
-      <span id="tabInd" class="absolute inset-y-[5px] left-[5px] w-[calc((100%-10px)/3)] rounded-lg bg-accent"></span>
-      <button role="tab" data-s="1" class="relative z-10 flex cursor-pointer flex-col items-center gap-px rounded-lg px-1.5 py-2 text-muted transition-colors aria-selected:text-on-accent"><b class="font-mono text-[11px] font-medium tracking-[.08em]">STEP 1</b><span class="text-[14.5px]">圈谓语</span></button>
-      <button role="tab" data-s="2" class="relative z-10 flex cursor-pointer flex-col items-center gap-px rounded-lg px-1.5 py-2 text-muted transition-colors aria-selected:text-on-accent"><b class="font-mono text-[11px] font-medium tracking-[.08em]">STEP 2</b><span class="text-[14.5px]">看结构</span></button>
-      <button role="tab" data-s="3" class="relative z-10 flex cursor-pointer flex-col items-center gap-px rounded-lg px-1.5 py-2 text-muted transition-colors aria-selected:text-on-accent"><b class="font-mono text-[11px] font-medium tracking-[.08em]">STEP 3</b><span class="text-[14.5px]">翻译</span></button>
+      <section id="viewPractice" class="flex flex-col gap-4">
+        <!-- 今日任务 -->
+        <section
+          id="task"
+          aria-label="今日任务"
+          class="flex flex-col gap-3 rounded-2xl border border-line bg-sheet px-4 py-3.5"
+        ></section>
+
+        <!-- 句库 -->
+        <div class="flex flex-col gap-2">
+          <div class="flex flex-wrap items-center gap-2.5">
+            <span class="font-mono text-[11px] tracking-[.1em] uppercase text-muted">句库</span>
+            <span id="bankCount" class="text-[13px] text-muted"></span>
+          </div>
+          <div id="bank" class="relative flex gap-4 overflow-x-auto px-0.5 pt-1 pb-2"></div>
+        </div>
+
+        <!-- 今日任务完成 -->
+        <section id="doneView" class="hidden flex-col gap-4"></section>
+
+        <!-- 练习区：句子 + 三个步骤 -->
+        <div id="work" class="flex flex-col gap-4">
+          <section
+            id="sheet"
+            class="flex flex-col gap-2.5 rounded-2xl border border-line bg-sheet px-[18px] pt-4 pb-5 transition-shadow duration-200 data-[stuck]:shadow-[0_12px_28px_-14px_rgba(15,23,42,.45)]"
+          >
+            <!-- 图钉单独放在右上角；左边是句子信息和工具，窄屏时工具换到第二行 -->
+            <div class="flex items-start gap-2">
+              <div class="flex min-w-0 flex-1 flex-wrap items-center justify-between gap-2">
+                <div
+                  class="flex min-h-[30px] min-w-0 flex-wrap items-center gap-2 font-mono text-[12px] tracking-[.03em] text-muted"
+                >
+                  <span id="label"></span>
+                  <span id="lvl" class="hidden rounded-full border border-line px-2"></span>
+                  <span id="focus"></span>
+                </div>
+                <div id="tools" class="flex items-center gap-1.5">
+                  <button
+                    id="speak"
+                    class="hidden cursor-pointer items-center gap-1.5 rounded-full border-[1.5px] border-line bg-sheet px-3 py-1 text-[13px]"
+                    aria-label="朗读整句"
+                  >
+                    <span class="inline-flex h-3 items-end gap-[2px]" aria-hidden="true"
+                      ><i class="eq block h-full w-[2.5px] rounded-[1px] bg-current"></i
+                      ><i class="eq block h-[70%] w-[2.5px] rounded-[1px] bg-current"></i
+                      ><i class="eq block h-[85%] w-[2.5px] rounded-[1px] bg-current"></i
+                    ></span>
+                    <span id="speakTxt">朗读</span>
+                  </button>
+                  <button
+                    id="voiceBtn"
+                    class="hidden h-[30px] w-[30px] cursor-pointer items-center justify-center rounded-full border-[1.5px] border-line bg-sheet"
+                    aria-label="声音设置"
+                    aria-expanded="false"
+                  >
+                    <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                      <path d="M2 5h7M12 5h2M2 11h2M7 11h7" />
+                      <circle cx="10.5" cy="5" r="1.6" />
+                      <circle cx="5.5" cy="11" r="1.6" />
+                    </svg>
+                  </button>
+                  <button
+                    id="dict"
+                    aria-pressed="false"
+                    class="inline-flex cursor-pointer items-center disabled:cursor-default gap-1.5 rounded-full border-[1.5px] border-line bg-sheet px-3 py-1 text-[13px] aria-pressed:border-accent aria-pressed:bg-accent aria-pressed:text-on-accent"
+                  >
+                    <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5">
+                      <path
+                        d="M2.5 3.2c1.8-.6 3.7-.4 5.5.8 1.8-1.2 3.7-1.4 5.5-.8v9.3c-1.8-.6-3.7-.4-5.5.8-1.8-1.2-3.7-1.4-5.5-.8z"
+                      />
+                      <path d="M8 4v9.3" /></svg
+                    >查词
+                  </button>
+                  <button
+                    id="more"
+                    class="h-[30px] cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-2.5 text-[13px] text-muted"
+                    aria-label="删除这一句"
+                  >
+                    删除
+                  </button>
+                </div>
+              </div>
+              <button
+                id="pin"
+                aria-pressed="false"
+                class="inline-flex h-[30px] w-[30px] flex-none cursor-pointer items-center justify-center rounded-full border-[1.5px] border-line bg-sheet text-muted transition-colors aria-pressed:border-accent aria-pressed:bg-accent aria-pressed:text-on-accent"
+                aria-label="把句子固定在屏幕顶部"
+                title="固定句子"
+              >
+                <svg
+                  class="h-4 w-4"
+                  viewBox="0 0 16 16"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.5"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M5.5 2h5M6.5 2v4L4.5 8.5h7L9.5 6V2M8 8.5V14" />
+                </svg>
+              </button>
+            </div>
+            <div
+              id="voicePanel"
+              class="hidden flex-wrap items-center gap-2 rounded-xl bg-raise px-3 py-2.5 text-[13.5px]"
+            >
+              <label for="voiceSel" class="text-muted">声音</label>
+              <select
+                id="voiceSel"
+                class="min-w-0 flex-[1_1_180px] rounded-lg border-[1.5px] border-line bg-sheet px-2 py-1"
+              ></select>
+              <div id="rates" class="flex gap-1">
+                <button
+                  data-rate="0.75"
+                  class="cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-2.5 py-0.5 font-mono text-[12px] aria-pressed:border-accent aria-pressed:text-accent"
+                >
+                  慢
+                </button>
+                <button
+                  data-rate="0.9"
+                  class="cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-2.5 py-0.5 font-mono text-[12px] aria-pressed:border-accent aria-pressed:text-accent"
+                >
+                  中
+                </button>
+                <button
+                  data-rate="1.05"
+                  class="cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-2.5 py-0.5 font-mono text-[12px] aria-pressed:border-accent aria-pressed:text-accent"
+                >
+                  快
+                </button>
+              </div>
+            </div>
+            <p
+              id="sentence"
+              class="-mx-[3px] m-0 font-en text-[17.5px] sm:text-[19px] leading-[2.15] [overflow-wrap:anywhere]"
+            ></p>
+            <p id="hint" class="m-0 hidden truncate text-[12.5px] text-muted"></p>
+            <div id="wordCard"></div>
+          </section>
+
+          <!-- 三个步骤 -->
+          <div
+            id="tabs"
+            role="tablist"
+            class="relative grid grid-cols-3 rounded-xl border border-line bg-sheet p-[5px]"
+          >
+            <span
+              id="tabInd"
+              class="absolute inset-y-[5px] left-[5px] w-[calc((100%-10px)/3)] rounded-lg bg-accent"
+            ></span>
+            <button
+              role="tab"
+              data-s="1"
+              class="relative z-10 flex cursor-pointer flex-col items-center gap-px rounded-lg px-1.5 py-2 text-muted transition-colors aria-selected:text-on-accent"
+            >
+              <b class="font-mono text-[11px] font-medium tracking-[.08em]">STEP 1</b
+              ><span class="text-[14.5px]">圈谓语</span>
+            </button>
+            <button
+              role="tab"
+              data-s="2"
+              class="relative z-10 flex cursor-pointer flex-col items-center gap-px rounded-lg px-1.5 py-2 text-muted transition-colors aria-selected:text-on-accent"
+            >
+              <b class="font-mono text-[11px] font-medium tracking-[.08em]">STEP 2</b
+              ><span class="text-[14.5px]">看结构</span>
+            </button>
+            <button
+              role="tab"
+              data-s="3"
+              class="relative z-10 flex cursor-pointer flex-col items-center gap-px rounded-lg px-1.5 py-2 text-muted transition-colors aria-selected:text-on-accent"
+            >
+              <b class="font-mono text-[11px] font-medium tracking-[.08em]">STEP 3</b
+              ><span class="text-[14.5px]">翻译</span>
+            </button>
+          </div>
+
+          <section id="panel" class="flex flex-col gap-3.5"></section>
+
+          <div id="nav" class="flex justify-between gap-2">
+            <button
+              id="prev"
+              class="cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-4 py-2 text-[14.5px] transition-transform active:scale-[.97]"
+            >
+              ← 上一句
+            </button>
+            <button
+              id="next"
+              class="cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-4 py-2 text-[14.5px] transition-transform active:scale-[.97]"
+            >
+              下一句 →
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section id="viewRecords" class="hidden flex-col gap-4"></section>
+
+      <section id="viewSettings" class="hidden flex-col gap-4">
+        <!-- 设置主页：几块数据一起读好再一起显示，免得一块一块跳出来 -->
+        <div id="settingsMain" class="flex flex-col gap-4">
+          <div id="settingsLoading" class="hidden items-center gap-2 py-2 text-[14px] text-muted" role="status">
+            <span
+              class="inline-block h-4 w-4 flex-none animate-spin rounded-full border-2 border-line border-t-accent"
+            ></span
+            >正在读取设置…
+          </div>
+          <div id="taskSettings" class="flex flex-col gap-4"></div>
+          <div id="inviteEntry" class="flex flex-col gap-4"></div>
+          <div id="llmSettings" class="flex flex-col gap-4"></div>
+          <div id="accountSettings" class="flex flex-col gap-4"></div>
+        </div>
+        <!-- 邀请码管理（只有管理员）：从设置主页点进来的单独页面 -->
+        <div id="settingsInvites" class="hidden flex-col gap-4"></div>
+      </section>
     </div>
 
-    <section id="panel" class="flex flex-col gap-3.5"></section>
+    <div
+      id="toast"
+      role="status"
+      aria-live="polite"
+      class="invisible fixed bottom-[calc(18px+env(safe-area-inset-bottom,0px))] left-1/2 z-40 flex max-w-[calc(100%-32px)] -translate-x-1/2 items-center gap-3 rounded-full bg-ink py-2.5 pr-3 pl-[18px] text-[14px] text-paper opacity-0 shadow-[0_8px_28px_rgba(0,0,0,.18)]"
+    ></div>
 
-    <div id="nav" class="flex justify-between gap-2">
-      <button id="prev" class="cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-4 py-2 text-[14.5px] transition-transform active:scale-[.97]">← 上一句</button>
-      <button id="next" class="cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-4 py-2 text-[14.5px] transition-transform active:scale-[.97]">下一句 →</button>
-    </div>
-    </div>
-  </section>
-
-  <section id="viewRecords" class="hidden flex-col gap-4"></section>
-
-  <section id="viewSettings" class="hidden flex-col gap-4">
-    <!-- 设置主页：几块数据一起读好再一起显示，免得一块一块跳出来 -->
-    <div id="settingsMain" class="flex flex-col gap-4">
-      <div id="settingsLoading" class="hidden items-center gap-2 py-2 text-[14px] text-muted" role="status">
-        <span class="inline-block h-4 w-4 flex-none animate-spin rounded-full border-2 border-line border-t-accent"></span>正在读取设置…
-      </div>
-      <div id="taskSettings" class="flex flex-col gap-4"></div>
-      <div id="inviteEntry" class="flex flex-col gap-4"></div>
-      <div id="llmSettings" class="flex flex-col gap-4"></div>
-      <div id="accountSettings" class="flex flex-col gap-4"></div>
-    </div>
-    <!-- 邀请码管理（只有管理员）：从设置主页点进来的单独页面 -->
-    <div id="settingsInvites" class="hidden flex-col gap-4"></div>
-  </section>
-</div>
-
-<div id="toast" role="status" aria-live="polite"
-  class="invisible fixed bottom-[calc(18px+env(safe-area-inset-bottom,0px))] left-1/2 z-40 flex max-w-[calc(100%-32px)] -translate-x-1/2 items-center gap-3 rounded-full bg-ink py-2.5 pr-3 pl-[18px] text-[14px] text-paper opacity-0 shadow-[0_8px_28px_rgba(0,0,0,.18)]"></div>
-
-<script src="/vendor/gsap.min.js"></script>
-<script type="module" src="/js/main.js"></script>
-</body>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
 </html>

@@ -1,9 +1,22 @@
 #!/usr/bin/env bash
 # 从 GitHub 拉最新代码并重新部署；新版本启动失败会自动退回上一个版本。
+# 只部署 GitHub Actions 检查（代码检查、类型检查、测试、构建）通过的提交。
 #   立即更新：  sudo sentence-update            （等同于 sudo bash /opt/sentence-site/scripts/update.sh）
-#   定时任务用：sudo sentence-update --if-changed   （没有新代码就什么都不做）
+#                                              检查还在跑时最多等 10 分钟；没通过就不部署
+#   强制更新：  sudo sentence-update --force    （不看检查结果，出问题时临时用）
+#   定时任务用：sudo sentence-update --if-changed   （没有新代码、或检查没通过 / 还没跑完时什么都不做）
 # 只会改动仓库里的文件，.env、data/（数据库）和 backups/ 不会动。
 set -euo pipefail
+
+SCHEDULED=0
+FORCE=0
+for arg in "$@"; do
+  case "$arg" in
+    --if-changed) SCHEDULED=1 ;;
+    --force) FORCE=1 ;;
+    *) echo "不认识的参数：$arg（可以用 --if-changed、--force）" >&2; exit 2 ;;
+  esac
+done
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BRANCH="${BRANCH:-main}"
@@ -34,7 +47,7 @@ done
 old="$(git rev-parse -q --verify HEAD || echo none)"
 new="$(git rev-parse FETCH_HEAD)"
 failed_file=.git/sentence-failed-commit
-if [[ "${1:-}" == "--if-changed" ]]; then
+if [[ $SCHEDULED -eq 1 ]]; then
   if [[ "$old" == "$new" ]]; then
     log "没有新代码（${new:0:7}）"
     exit 0
@@ -44,6 +57,58 @@ if [[ "${1:-}" == "--if-changed" ]]; then
     log "${new:0:7} 上次没能正常启动，等新的代码再更新（手动更新可以强制重试）"
     exit 0
   fi
+fi
+
+# ---- GitHub Actions 的检查结果 ------------------------------------------------
+# 输出 success / failure / pending（还没跑完）/ unknown（连不上 GitHub 或解析不了）
+ci_state() {
+  local repo json
+  repo="${GITHUB_REPO:-$(git config --get remote.origin.url | sed -E 's#^(https://github\.com/|git@github\.com:)##; s#\.git$##')}"
+  json="$(curl -fsS -m 20 -H 'Accept: application/vnd.github+json' \
+    "https://api.github.com/repos/${repo}/commits/$1/check-runs?per_page=100" 2>/dev/null)" || { echo unknown; return; }
+  command -v python3 >/dev/null 2>&1 || { echo unknown; return; }
+  printf '%s' "$json" | python3 -c '
+import json, sys
+runs = json.load(sys.stdin).get("check_runs", [])
+if not runs or any(r.get("status") != "completed" for r in runs):
+    print("pending")
+elif all(r.get("conclusion") in ("success", "skipped", "neutral") for r in runs):
+    print("success")
+else:
+    print("failure")
+' 2>/dev/null || echo unknown
+}
+
+if [[ $FORCE -eq 1 ]]; then
+  log "加了 --force，不看 GitHub 上的检查结果"
+else
+  state="$(ci_state "$new")"
+  if [[ $SCHEDULED -eq 0 && $state == pending ]]; then
+    log "GitHub 上的检查还在跑，最多等 10 分钟…"
+    for _ in $(seq 1 30); do
+      sleep 20
+      state="$(ci_state "$new")"
+      [[ $state == pending ]] || break
+    done
+  fi
+  case "$state" in
+    success)
+      log "GitHub 上的检查通过（${new:0:7}）"
+      ;;
+    failure)
+      msg="${new:0:7} 没通过 GitHub 上的检查（代码检查、类型检查、测试或构建出错），网站保持原样。修好再推送；确定要部署就加 --force"
+      [[ $SCHEDULED -eq 1 ]] && { log "$msg"; exit 0; }
+      die "$msg"
+      ;;
+    pending)
+      [[ $SCHEDULED -eq 1 ]] && { log "${new:0:7} 的检查还没跑完，下次再更新"; exit 0; }
+      die "等了 10 分钟检查还没跑完，稍后再试；确定要部署就加 --force"
+      ;;
+    *)
+      [[ $SCHEDULED -eq 1 ]] && { log "查不到 GitHub 上的检查结果（连不上 api.github.com），这次先不更新"; exit 0; }
+      log "查不到 GitHub 上的检查结果（连不上 api.github.com），按手动更新继续部署"
+      ;;
+  esac
 fi
 
 port="$(grep -E '^WEB_PORT=' .env | tail -1 | cut -d= -f2 | tr -d '[:space:]"'"'"'')"
@@ -71,7 +136,7 @@ if deploy "$new"; then
 fi
 
 if [[ "$old" == "none" ]]; then
-  die "新版本没有正常启动，看看日志：sudo docker compose logs --tail 50 api"
+  die "新版本没有正常启动，看看日志：sudo docker compose logs --tail 50 api web"
 fi
 echo "$new" > "$failed_file"
 log "新版本没有正常启动，退回 ${old:0:7}"

@@ -1,5 +1,5 @@
 # 长难句拆解台 · 服务编排
-#   docker compose up -d --build
+#   docker compose up -d --build（服务器上用 sudo sentence-update，会先确认 GitHub 上的检查通过）
 # 配置都在同目录的 .env 里（第一次部署可以从 .env.example 复制）
 name: sentence-site
 
@@ -15,31 +15,39 @@ services:
     volumes:
       - ./data/postgres:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      test: ['CMD-SHELL', 'pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}']
       interval: 5s
       timeout: 5s
       retries: 12
     # 数据库端口不对外开放，只在内部网络里给 api 用
 
   api:
-    build: ./api
+    # 构建上下文是仓库根目录（npm workspaces 的锁文件在根目录）
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://mirrors.cloud.tencent.com/npm/}
     image: sentence-site-api
     restart: unless-stopped
     env_file: .env
     environment:
       DB_HOST: db
-      PORT: "3000"
+      PORT: '3000'
     depends_on:
       db:
         condition: service_healthy
 
   web:
-    image: nginx:1.27-alpine
+    # 用 Vite 构建前端，再和 nginx/default.conf 一起打进 Nginx 镜像
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-https://mirrors.cloud.tencent.com/npm/}
+    image: sentence-site-web
     restart: unless-stopped
     ports:
-      - "${WEB_PORT:-80}:80"   # 对外端口在 .env 的 WEB_PORT 里改
-    volumes:
-      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
-      - ./web:/usr/share/nginx/html:ro
+      - '${WEB_PORT:-80}:80' # 对外端口在 .env 的 WEB_PORT 里改
     depends_on:
       - api

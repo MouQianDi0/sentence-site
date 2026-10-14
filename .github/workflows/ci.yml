@@ -1,0 +1,104 @@
+# 每次推送都检查：代码格式、ESLint、类型检查、后端测试、前端构建，再用 Docker 把整个网站起一遍。
+# 服务器上的自动更新（scripts/update.sh）只部署这里全部通过的提交。
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # 仓库里的 .npmrc 用的是腾讯云镜像（给国内服务器用），GitHub 上直接用官方源
+  npm_config_registry: https://registry.npmjs.org/
+
+jobs:
+  check:
+    name: 代码检查、类型检查、测试、构建
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # 后端测试通过 psql 连这个数据库（见 api/test/helpers.ts）
+      TEST_PGHOST: localhost
+      TEST_PGPORT: '5432'
+      TEST_PGUSER: postgres
+      PGPASSWORD: postgres
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - name: 安装依赖
+        run: npm ci
+      - name: 代码格式（Prettier）
+        run: npm run format:check
+      - name: 代码检查（ESLint）
+        run: npm run lint
+      - name: 类型检查（TypeScript）
+        run: npm run typecheck
+      - name: 后端测试
+        run: npm test
+      - name: 前端构建
+        run: npm run build
+
+  docker:
+    name: Docker 镜像构建 + 整站启动
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - name: 准备 .env
+        run: |
+          cp .env.example .env
+          sed -i "s/^COOKIE_SECRET=.*/COOKIE_SECRET=$(openssl rand -hex 32)/" .env
+          sed -i "s/^POSTGRES_PASSWORD=.*/POSTGRES_PASSWORD=ci-$(openssl rand -hex 8)/" .env
+          sed -i 's/^ACCESS_PASSWORD=.*/ACCESS_PASSWORD=ci-password/' .env
+          sed -i 's/^WEB_PORT=.*/WEB_PORT=8080/' .env
+      - name: 构建并启动
+        env:
+          NPM_REGISTRY: https://registry.npmjs.org/
+        run: docker compose up -d --build
+      - name: 等网站起来
+        run: |
+          for i in $(seq 1 40); do
+            if curl -fsS http://127.0.0.1:8080/api/health | grep -q '"db":true'; then echo "健康检查通过"; break; fi
+            [ "$i" = 40 ] && { echo "::error::网站没有正常启动"; exit 1; }
+            sleep 3
+          done
+      - name: 检查页面和静态文件
+        run: |
+          html=$(curl -fsS http://127.0.0.1:8080/)
+          echo "$html" | grep -q '长难句拆解台'
+          asset=$(echo "$html" | grep -o '/assets/[^"]*\.js' | head -n 1)
+          curl -fsS -o /dev/null "http://127.0.0.1:8080${asset}"
+          curl -fsSI "http://127.0.0.1:8080${asset}" | grep -qi 'immutable'
+          curl -fsS http://127.0.0.1:8080/api/session | grep -q '"unlocked":false'
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"password":"ci-password"}' http://127.0.0.1:8080/api/unlock)
+          [ "$code" = 200 ] || { echo "::error::登录失败（$code）"; exit 1; }
+      - name: 出错时打印日志
+        if: failure()
+        run: docker compose logs --tail 100 --no-color
+      - name: 清理
+        if: always()
+        run: docker compose down -v

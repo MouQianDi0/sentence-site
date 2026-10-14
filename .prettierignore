@@ -1,0 +1,11 @@
+node_modules
+dist
+data
+backups
+package-lock.json
+# 出题规范：后端按原样放进提示词，不要自动改格式
+api/skills
+.claude
+# 旧页面导出的数据
+api/seed
+*.md
