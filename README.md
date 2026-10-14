@@ -45,7 +45,7 @@ cd /opt/sentence-site && sudo docker compose up -d --build
 
 ## 访问
 
-开了 HTTPS 以后打开 `https://服务器IP`（还没开时是 `http://服务器IP:端口`，端口是 `.env` 里的 `WEB_PORT`），输入访问密码。忘了密码可以看：
+开了 HTTPS 以后打开 `https://服务器IP:8443`（还没开时是 `http://服务器IP:端口`，端口是 `.env` 里的 `WEB_PORT`），输入访问密码。忘了密码可以看：
 
 ```bash
 sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
@@ -53,17 +53,19 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 
 ## HTTPS
 
-服务器上本来就有一个 Nginx 占着 80 端口，HTTPS 由它来做：它接住 80、443 端口，把请求转给只在本机监听的网站容器。证书用 Let's Encrypt，acme.sh 申请并自动续期。在项目目录下运行（先 `sudo sentence-update` 拿到最新代码）：
+服务器上本来就有一个 Nginx 占着 80 端口，HTTPS 由它来做：它在 8443 端口接住 HTTPS，把请求转给只在本机监听的网站容器；443 留给服务器上原来的网站，不去抢。证书用 Let's Encrypt，acme.sh 申请并自动续期。在项目目录下运行（先 `sudo sentence-update` 拿到最新代码）：
 
 ```bash
-sudo bash scripts/enable-https.sh                    # 用公网 IP：https://公网IP
+sudo bash scripts/enable-https.sh                    # 用公网 IP：https://公网IP:8443
+sudo bash scripts/enable-https.sh --port 9443        # 换个 HTTPS 端口（443 没被别的网站占着时可以 --port 443，网址就不用带端口）
 sudo bash scripts/enable-https.sh cet.example.com    # 以后有了备案好的域名就换成域名（会再申请一张域名证书）
 sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 http://公网IP:8080
 ```
 
 - 还没有备案的域名时用 IP 证书：Let's Encrypt 的 IP 证书每张只有 6 天，acme.sh 每天检查一次、满 3 天就续，不用管。
-- 腾讯云防火墙要放行 TCP 443；TCP 80 也要一直开着，续期时 Let's Encrypt 要从外网访问它。
-- 开了之后 `http://IP` 和以前的 `http://IP:8080` 都会跳到 https；网站容器改成只在本机 8081 端口监听（`.env` 里的 `WEB_BIND=127.0.0.1`、`WEB_PORT=8081`），`COOKIE_SECURE=1` 让登录状态只走 HTTPS。
+- 腾讯云防火墙要放行 HTTPS 端口（默认 TCP 8443）；TCP 80 也要一直开着，申请和续期证书时 Let's Encrypt 只会从外网访问 80 端口。
+- 端口记在 `.env` 的 `HTTPS_PORT` 里，以后重新运行脚本沿用；换端口不用重新申请证书。
+- 开了之后 `http://IP`、以前的 `http://IP:8080`、用 `http://` 打开 HTTPS 端口，都会跳到 https；网站容器改成只在本机 8081 端口监听（`.env` 里的 `WEB_BIND=127.0.0.1`、`WEB_PORT=8081`），`COOKIE_SECURE=1` 让登录状态只走 HTTPS。
 - 脚本只加一份自己的 Nginx 配置（`/etc/nginx/conf.d/sentence-site.conf`），服务器上原来的网站不受影响。可以重复运行，证书没到续期时间不会重新申请。
 - 看证书什么时候到期：`sudo openssl x509 -noout -enddate -in /etc/nginx/ssl/sentence-site/fullchain.pem`
 
@@ -91,7 +93,7 @@ sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 htt
 | 要做的事 | 命令 |
 | --- | --- |
 | 看后端日志 | `sudo docker compose logs -f api` |
-| 开 HTTPS / 撤掉 HTTPS | `sudo bash scripts/enable-https.sh` / `sudo bash scripts/enable-https.sh --off` |
+| 开 HTTPS / 换 HTTPS 端口 / 撤掉 HTTPS | `sudo bash scripts/enable-https.sh` / `… --port 9443` / `… --off` |
 | 改了 `.env` 后生效 | `sudo docker compose up -d --force-recreate api` |
 | 立即更新到 GitHub 上的最新代码 | `sudo sentence-update` |
 | 看自动更新日志 | `sudo tail -n 30 /var/log/sentence-site-update.log` |
