@@ -890,6 +890,36 @@ async function saveFix(useAi) {
   }
 }
 
+// ---------- 固定句子 ----------
+// 点图钉后句子卡片吸在屏幕顶部，往下看步骤和讲解时句子一直在；太高时卡片里面自己滚动。设置记在本机，换句子、刷新后还在
+const PIN_CLS = ['sticky', 'top-[max(8px,env(safe-area-inset-top))]', 'z-20', 'max-h-[60vh]', 'overflow-y-auto', 'overscroll-contain'];
+function updStuck() {
+  const el = $('sheet');
+  const top = parseFloat(getComputedStyle(el).top);
+  el.toggleAttribute('data-stuck', !!ui.pin && window.scrollY > 0 && el.getBoundingClientRect().top <= top + 0.5);
+}
+function applyPin() {
+  const on = !!ui.pin;
+  const b = $('pin');
+  b.setAttribute('aria-pressed', String(on));
+  b.setAttribute('aria-label', on ? '取消固定句子' : '把句子固定在屏幕顶部');
+  b.title = on ? '取消固定' : '固定句子';
+  PIN_CLS.forEach((c) => $('sheet').classList.toggle(c, on));
+  updStuck();
+}
+let stuckRaf = 0;
+window.addEventListener(
+  'scroll',
+  () => {
+    if (!ui.pin || stuckRaf) return;
+    stuckRaf = requestAnimationFrame(() => {
+      stuckRaf = 0;
+      updStuck();
+    });
+  },
+  { passive: true },
+);
+
 // ---------- 删除 ----------
 function disarmDelete() {
   clearTimeout(deleteArmed);
@@ -1254,6 +1284,13 @@ $('tabs').addEventListener('click', (e) => {
 $('prev').onclick = () => move(-1);
 $('next').onclick = () => move(1);
 $('more').onclick = onDelete;
+$('pin').onclick = () => {
+  ui.pin = !ui.pin;
+  saveUI();
+  applyPin();
+  toast(ui.pin ? '句子已固定在屏幕顶部，再点图钉取消' : '已取消固定');
+};
+applyPin();
 $('task').addEventListener('click', onTaskClick);
 $('doneView').addEventListener('click', onTaskClick);
 $('dict').onclick = () => {

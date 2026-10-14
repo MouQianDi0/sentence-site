@@ -60,7 +60,7 @@
 
     <!-- 练习区：句子 + 三个步骤 -->
     <div id="work" class="flex flex-col gap-4">
-    <section id="sheet" class="flex flex-col gap-2.5 rounded-2xl border border-line bg-sheet px-[18px] pt-4 pb-5">
+    <section id="sheet" class="flex flex-col gap-2.5 rounded-2xl border border-line bg-sheet px-[18px] pt-4 pb-5 transition-shadow duration-200 data-[stuck]:shadow-[0_12px_28px_-14px_rgba(15,23,42,.45)]">
       <div class="flex flex-wrap items-center justify-between gap-2">
         <div class="flex min-w-0 flex-wrap items-center gap-2 font-mono text-[12px] tracking-[.03em] text-muted">
           <span id="label"></span>
@@ -68,6 +68,9 @@
           <span id="focus"></span>
         </div>
         <div id="tools" class="flex items-center gap-1.5">
+          <button id="pin" aria-pressed="false" class="inline-flex h-[30px] w-[30px] flex-none cursor-pointer items-center justify-center rounded-full border-[1.5px] border-line bg-sheet text-muted transition-colors aria-pressed:border-accent aria-pressed:bg-accent aria-pressed:text-on-accent" aria-label="把句子固定在屏幕顶部" title="固定句子">
+            <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5.5 2h5M6.5 2v4L4.5 8.5h7L9.5 6V2M8 8.5V14"/></svg>
+          </button>
           <button id="speak" class="hidden cursor-pointer items-center gap-1.5 rounded-full border-[1.5px] border-line bg-sheet px-3 py-1 text-[13px]" aria-label="朗读整句">
             <span class="inline-flex h-3 items-end gap-[2px]" aria-hidden="true"><i class="eq block h-full w-[2.5px] rounded-[1px] bg-current"></i><i class="eq block h-[70%] w-[2.5px] rounded-[1px] bg-current"></i><i class="eq block h-[85%] w-[2.5px] rounded-[1px] bg-current"></i></span>
             <span id="speakTxt">朗读</span>
