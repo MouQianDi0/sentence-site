@@ -75,7 +75,7 @@
           <button id="voiceBtn" class="hidden h-[30px] w-[30px] cursor-pointer items-center justify-center rounded-full border-[1.5px] border-line bg-sheet" aria-label="声音设置" aria-expanded="false">
             <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 5h7M12 5h2M2 11h2M7 11h7"/><circle cx="10.5" cy="5" r="1.6"/><circle cx="5.5" cy="11" r="1.6"/></svg>
           </button>
-          <button id="dict" aria-pressed="false" class="inline-flex cursor-pointer items-center gap-1.5 rounded-full border-[1.5px] border-line bg-sheet px-3 py-1 text-[13px] aria-pressed:border-accent aria-pressed:bg-accent aria-pressed:text-on-accent">
+          <button id="dict" aria-pressed="false" class="inline-flex cursor-pointer items-center disabled:cursor-default gap-1.5 rounded-full border-[1.5px] border-line bg-sheet px-3 py-1 text-[13px] aria-pressed:border-accent aria-pressed:bg-accent aria-pressed:text-on-accent">
             <svg class="h-4 w-4" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2.5 3.2c1.8-.6 3.7-.4 5.5.8 1.8-1.2 3.7-1.4 5.5-.8v9.3c-1.8-.6-3.7-.4-5.5.8-1.8-1.2-3.7-1.4-5.5-.8z"/><path d="M8 4v9.3"/></svg>查词
           </button>
           <button id="more" class="h-[30px] cursor-pointer rounded-full border-[1.5px] border-line bg-sheet px-2.5 text-[13px] text-muted" aria-label="删除这一句">删除</button>
@@ -91,7 +91,7 @@
         </div>
       </div>
       <p id="sentence" class="m-0 font-en text-[17.5px] sm:text-[19px] leading-[2.15] [overflow-wrap:anywhere]"></p>
-      <p id="hint" class="m-0 hidden text-[12.5px] text-muted"></p>
+      <p id="hint" class="m-0 hidden truncate text-[12.5px] text-muted"></p>
       <div id="wordCard"></div>
     </section>
 

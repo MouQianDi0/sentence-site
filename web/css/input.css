@@ -60,6 +60,11 @@
   --color-read: var(--read);
 }
 
+/* 句子里的“加粗”只加一圈描边：字宽不变，换步骤、检查答案时句子不会重新换行、上下跳动 */
+@utility fake-bold {
+  -webkit-text-stroke: 0.035em currentColor;
+}
+
 @theme {
   --font-en: ui-serif, "New York", Georgia, "Times New Roman", serif;
   --font-zh: "PingFang SC", "Hiragino Sans GB", "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;

@@ -197,8 +197,8 @@ function dotHTML(s, i, newCut) {
 }
 
 // ---------- 句子 ----------
-const W_BASE = 'inline cursor-pointer rounded-[5px] px-0.5 -mx-px [line-height:inherit] transition-colors hover:bg-accent-soft data-[reading]:bg-read';
-const T_BASE = 'inline rounded-full px-[3px] -mx-px [line-height:inherit] transition-colors data-[reading]:bg-read';
+const W_BASE = 'inline cursor-pointer rounded-[5px] px-0.5 -mx-0.5 [line-height:inherit] transition-colors hover:bg-accent-soft data-[reading]:bg-read';
+const T_BASE = 'inline rounded-full px-0.5 -mx-0.5 [line-height:inherit] transition-colors data-[reading]:bg-read';
 
 function renderSentence() {
   const el = $('sentence');
@@ -216,13 +216,15 @@ function renderSentence() {
     return;
   }
   $('tools').classList.remove('invisible');
+  hint.classList.remove('hidden');
   $('label').textContent = `句子 ${sentences.indexOf(cur) + 1} / ${sentences.length}`;
   $('lvl').classList.toggle('hidden', !cur.level);
   $('lvl').textContent = cur.level;
   $('focus').textContent = cur.focus;
   const dict = (dictMode && !fix) || step === 3;
-  $('dict').classList.toggle('hidden', step === 3);
-  $('dict').setAttribute('aria-pressed', String(dictMode));
+  // 第 3 步一直是查词状态：按钮保持原位、显示为按下且不能点，工具栏不会因为它消失而挪动
+  $('dict').disabled = step === 3 || !!fix;
+  $('dict').setAttribute('aria-pressed', String(dict));
   const fw = flat(cur);
 
   if (dict) {
@@ -231,26 +233,25 @@ function renderSentence() {
       .map((x, i) => {
         let c = W_BASE;
         if (pm[i] != null) c += ' underline decoration-dotted decoration-accent decoration-2 underline-offset-[5px]';
-        if (step === 3 && x.k) c += ' font-semibold';
+        if (step === 3 && x.k) c += ' fake-bold';
         if (wordSel === i) c += ' bg-accent text-on-accent hover:bg-accent';
         return `${esc(x.lead)}<button class="${c}" data-w="${i}" data-a="${i}" data-b="${i}">${esc(x.core)}</button>${esc(x.trail)}`;
       })
       .join(' ');
-    hint.classList.remove('hidden');
     hint.textContent = (cur.phrases || []).length ? '点单词看释义，虚线下划线是固定搭配。' : '点单词看释义。';
   } else if (step === 1 && fix) {
-    hint.classList.add('hidden');
+    hint.textContent = '点词标出正确的谓语。';
     el.innerHTML = fw
       .map((x, i) => {
         const k = fix.tag[i];
         let c = `${W_BASE} ${fix.busy ? 'cursor-default' : ''}`;
-        if (k === 'main') c += ' bg-ok-soft font-semibold text-ok shadow-[inset_0_0_0_2px_var(--ok)]';
+        if (k === 'main') c += ' bg-ok-soft fake-bold text-ok shadow-[inset_0_0_0_2px_var(--ok)]';
         else if (k === 'sub') c += ' text-ok shadow-[inset_0_0_0_2px_var(--ok)]';
         return `${esc(x.lead)}<button class="${c}" data-fx="${i}" aria-label="${esc(x.core)}：${k === 'main' ? '主句谓语' : k === 'sub' ? '从句谓语' : '不是谓语'}">${esc(x.core)}</button>${esc(x.trail)}`;
       })
       .join(' ');
   } else if (step === 1) {
-    hint.classList.add('hidden');
+    hint.textContent = checked ? '绿框是谓语，绿底是主句谓语。' : '点出句子里所有的谓语动词。';
     const t = [];
     let wi = 0;
     cur.segs.forEach((g) =>
@@ -268,7 +269,7 @@ function renderSentence() {
           if (tk.k && sel) c += ' shadow-[inset_0_0_0_2px_var(--ok)] text-ok';
           else if (tk.k) c += ' shadow-[inset_0_0_0_2px_var(--ok)] text-ok bg-[repeating-linear-gradient(135deg,var(--ok-soft)_0_4px,transparent_4px_8px)]';
           else if (sel) c += ' shadow-[inset_0_0_0_2px_var(--bad)] text-bad line-through';
-          if (tk.k === 'main') c += ' bg-ok-soft font-semibold';
+          if (tk.k === 'main') c += ' bg-ok-soft fake-bold';
           c += ' cursor-default';
         } else {
           c += ' cursor-pointer hover:bg-accent-soft';
@@ -278,7 +279,7 @@ function renderSentence() {
       })
       .join(' ');
   } else {
-    hint.classList.add('hidden');
+    hint.textContent = '点彩色片段，看它是什么成分、修饰谁。';
     let wi = 0;
     el.innerHTML = cur.segs
       .map((g, si) => {
@@ -287,12 +288,12 @@ function renderSentence() {
         const a = wi;
         wi += n;
         const rc = ROLE_CLS[g.r] || ROLE_CLS.main;
-        let c = `cursor-pointer rounded-[3px] px-0.5 py-0.5 box-decoration-clone bg-[linear-gradient(var(--hl),var(--hl))] bg-no-repeat border-b-[2.5px] transition-opacity duration-200 data-[reading]:outline-2 data-[reading]:outline-read ${rc.hl}`;
+        let c = `cursor-pointer rounded-[3px] px-0.5 -mx-0.5 py-0.5 box-decoration-clone bg-[linear-gradient(var(--hl),var(--hl))] bg-no-repeat border-b-[2.5px] transition-opacity duration-200 data-[reading]:outline-2 data-[reading]:outline-read ${rc.hl}`;
         c += roleOn[g.r] ? ` ${rc.border}` : ' border-transparent';
         if (mainOnly && g.r !== 'main') c += ' opacity-20';
         if (segPick === si) c += ' outline-2 outline-offset-1 outline-ink';
         const inner = tk
-          .map((x) => (x.k === 'main' ? `<b class="font-semibold underline decoration-2 underline-offset-4">${esc(x.t)}</b>${esc(x.p)}` : x.k === 'sub' ? `<b class="font-semibold">${esc(x.t)}</b>${esc(x.p)}` : esc(x.t)))
+          .map((x) => (x.k === 'main' ? `<span class="fake-bold underline decoration-2 underline-offset-4">${esc(x.t)}</span>${esc(x.p)}` : x.k === 'sub' ? `<span class="fake-bold">${esc(x.t)}</span>${esc(x.p)}` : esc(x.t)))
           .join(' ');
         return `<span class="${c}" style="background-size:${roleOn[g.r] ? '100%' : '0%'} 100%" data-seg="${si}" data-a="${a}" data-b="${wi - 1}" tabindex="0" role="button">${inner}</span>`;
       })
@@ -781,12 +782,33 @@ function open(id, { keepView = false } = {}) {
   freshAnswer = false;
   disarmDelete();
   fix = null;
+  $('panel').style.minHeight = '';
   roleOn = { main: 1, attr: 1, noun: 1, adv: 1, nonfin: 1 };
   optOrder = shuffle(s.opts.length);
   const c = rec(s.id)?.choice;
   answer = c && c.pick >= 0 && c.pick < s.opts.length ? c.pick : -1;
   if (!keepView) view = 'practice';
   renderAll(true);
+}
+
+/**
+ * 重新渲染时让步骤标签停在屏幕上原来的位置：上方句子卡片高度变了就跟着滚动补回；
+ * 下方内容变短、页面滚不回原位时，给面板补一点最小高度（换句子时清掉）。
+ */
+function pinTabs(fn) {
+  const tabs = $('tabs');
+  const panel = $('panel');
+  const top = () => tabs.getBoundingClientRect().top;
+  const before = top();
+  fn();
+  let d = top() - before;
+  if (Math.abs(d) < 1) return;
+  window.scrollBy({ top: d, behavior: 'instant' });
+  d = top() - before;
+  if (d >= 1) {
+    panel.style.minHeight = `${panel.offsetHeight + d}px`;
+    window.scrollBy({ top: d, behavior: 'instant' });
+  }
 }
 
 function setStep(n) {
@@ -796,9 +818,11 @@ function setStep(n) {
   wordSel = null;
   fix = null;
   if (n === 2) sweepPending = true;
-  renderTabs();
-  renderSentence();
-  renderPanel(true);
+  pinTabs(() => {
+    renderTabs();
+    renderSentence();
+    renderPanel(true);
+  });
 }
 
 function move(d) {
@@ -1385,8 +1409,10 @@ $('panel').addEventListener('click', (e) => {
         } else if (sel) wrong++;
       });
       saveRecord(cur.id, { verbs: { ok, total, wrong } });
-      renderSentence();
-      renderPanel(true);
+      pinTabs(() => {
+        renderSentence();
+        renderPanel(true);
+      });
       A.popEach($('sentence').querySelectorAll('[data-t]'));
       return;
     }
@@ -1396,8 +1422,10 @@ $('panel').addEventListener('click', (e) => {
     case 'fix':
       wordSel = null;
       fix = { tag: flat(cur).map((x) => x.k), busy: '', msg: '' };
-      renderSentence();
-      renderPanel(true);
+      pinTabs(() => {
+        renderSentence();
+        renderPanel(true);
+      });
       return;
     case 'fixCancel':
       fix = null;
@@ -1443,8 +1471,10 @@ $('panel').addEventListener('click', (e) => {
     default:
       return;
   }
-  renderSentence();
-  renderPanel(false);
+  pinTabs(() => {
+    renderSentence();
+    renderPanel(false);
+  });
 });
 $('panel').addEventListener('input', (e) => {
   if (e.target.id === 'draft' && cur) saveDraft(cur.id, e.target.value);
