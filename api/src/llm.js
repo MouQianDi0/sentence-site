@@ -150,5 +150,8 @@ export function createLlm(cfg, fetchImpl = globalThis.fetch) {
     return ids;
   }
 
-  return { ready, chatJson, listModels };
+  /** 当前配置的主力模型和轻量模型 */
+  const models = () => ({ main: cfg.llm.mainModel, light: cfg.llm.lightModel || cfg.llm.mainModel });
+
+  return { ready, chatJson, listModels, models };
 }

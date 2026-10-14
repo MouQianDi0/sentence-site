@@ -1,5 +1,5 @@
-// 访问密码：不做账号，只用一个密码换一个 30 天有效的签名 Cookie。
-// 改了 ACCESS_PASSWORD 之后，旧 Cookie 全部失效（Cookie 里带着密码版本号）。
+// 登录：访问密码登录你自己的账户（owner），邀请码登录对应的邀请账户；换一个 30 天有效的签名 Cookie。
+// Cookie 里带着账户 id 和版本号：改了 ACCESS_PASSWORD 后你自己的旧 Cookie 失效，删除邀请码后对应账户的 Cookie 失效。
 import crypto from 'node:crypto';
 
 export const COOKIE_NAME = 'ss_session';
@@ -18,23 +18,27 @@ export function createAuth({ accessPassword, cookieSecret, now = () => Date.now(
   const sign = (payload) =>
     crypto.createHmac('sha256', cookieSecret).update(payload).digest('base64url');
 
-  function issue() {
-    const payload = Buffer.from(JSON.stringify({ v: pwVersion, exp: now() + MAX_AGE })).toString('base64url');
+  /** accountId 不传时是 owner */
+  function issue(accountId = 'owner', version = pwVersion) {
+    const payload = Buffer.from(JSON.stringify({ a: accountId, v: version, exp: now() + MAX_AGE })).toString('base64url');
     return `${payload}.${sign(payload)}`;
   }
 
+  /** 签名和有效期对得上时返回 {a, v}（账户 id 和版本号），由调用方再去核对账户；否则返回 null */
   function verify(token) {
-    if (typeof token !== 'string') return false;
+    if (typeof token !== 'string') return null;
     const [payload, sig] = token.split('.');
-    if (!payload || !sig) return false;
-    const a = Buffer.from(sig);
-    const b = Buffer.from(sign(payload));
-    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return false;
+    if (!payload || !sig) return null;
+    const x = Buffer.from(sig);
+    const y = Buffer.from(sign(payload));
+    if (x.length !== y.length || !crypto.timingSafeEqual(x, y)) return null;
     try {
       const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
-      return data.v === pwVersion && typeof data.exp === 'number' && data.exp > now();
+      if (typeof data.exp !== 'number' || data.exp <= now()) return null;
+      // 旧版 Cookie 没有账户 id，都是 owner 的
+      return { a: typeof data.a === 'string' ? data.a : 'owner', v: data.v };
     } catch {
-      return false;
+      return null;
     }
   }
 
@@ -55,13 +59,19 @@ export function createAuth({ accessPassword, cookieSecret, now = () => Date.now(
     return Math.ceil((f.until - now()) / 60000);
   }
 
-  function tryPassword(ip, password) {
+  /**
+   * 先按访问密码比对，不对再用 findByCode 找邀请码对应的账户。
+   * 成功返回 {ok:true, account:'owner'} 或 {ok:true, account:<邀请账户>}；连续错 5 次锁 15 分钟。
+   */
+  async function tryLogin(ip, input, findByCode = async () => null) {
     const locked = lockedMinutes(ip);
     if (locked) return { ok: false, locked };
-    const ok = typeof password === 'string' && crypto.timingSafeEqual(sha256(password), pwHash);
-    if (ok) {
+    const text = typeof input === 'string' ? input : '';
+    let account = text && crypto.timingSafeEqual(sha256(text), pwHash) ? 'owner' : null;
+    if (!account && text) account = (await findByCode(text)) || null;
+    if (account) {
       fails.delete(ip);
-      return { ok: true };
+      return { ok: true, account };
     }
     const f = fails.get(ip) || { count: 0, until: 0 };
     f.count += 1;
@@ -75,5 +85,5 @@ export function createAuth({ accessPassword, cookieSecret, now = () => Date.now(
     return { ok: false, left: MAX_FAILS - f.count };
   }
 
-  return { issue, verify, cookie, tryPassword };
+  return { issue, verify, cookie, tryLogin, ownerVersion: pwVersion };
 }

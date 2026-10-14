@@ -30,7 +30,13 @@ async function request(method, path, body) {
 
 export const api = {
   session: () => request('GET', '/api/session'),
+  // password：访问密码或邀请码
   unlock: (password) => request('POST', '/api/unlock', { password }),
+  lock: () => request('POST', '/api/lock'),
+  // 邀请码管理（只有你自己能用）
+  invites: () => request('GET', '/api/admin/invites'),
+  createInvite: (note) => request('POST', '/api/admin/invites', { note }),
+  deleteInvite: (id) => request('DELETE', `/api/admin/invites/${encodeURIComponent(id)}`),
   sentences: (since) => request('GET', `/api/sentences${since ? `?since=${encodeURIComponent(since)}` : ''}`),
   deleteSentence: (id) => request('DELETE', `/api/sentences/${encodeURIComponent(id)}`),
   // 谓语标错了：spans 按整句单词下标 [{kind:'main'|'sub', a, b}]；或者让 AI 复查这一句

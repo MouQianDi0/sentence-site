@@ -50,15 +50,19 @@ export function cleanFeedback(data, text) {
 
 const markKey = (segs) => extractMarks(segs).map((m) => `${m.kind}:${m.a}-${m.b}`).join(',');
 
-export function createAi({ cfg, llm, log = console }) {
+/**
+ * llmFor(account)：这个账户用哪个 AI 客户端（你自己用 llm；邀请账户用它自己配置的，见 createSettingsHub）。
+ * 不传时所有账户都用 llm（测试里用）。
+ */
+export function createAi({ cfg, llm, llmFor = async () => llm, log = console }) {
   /**
    * 让 AI 复核一批句子的谓语标注。返回和 items 一样长的数组，每项：
    * {status:'ok', segs, changed, note}；{status:'unknown'}（回复里没有这一句）；{status:'mismatch'}（给的谓语在原句里找不到）
    */
-  async function reviewMarks(items) {
-    const r = await llm.chatJson({
+  async function reviewMarks(L, items) {
+    const r = await L.chatJson({
       prompt: reviewPrompt(items),
-      model: cfg.llm.mainModel,
+      model: L.models().main,
       maxTokens: 400 + 250 * items.length,
       temperature: 0.1,
       timeoutMs: Math.max(cfg.llm.timeoutMs, 90_000),
@@ -75,25 +79,27 @@ export function createAi({ cfg, llm, log = console }) {
     });
   }
 
+  // 下面这些都按账户来：account 是 accounts 表的一行，只能动这个账户自己的句子
+
   /** 做题时发现标错了：让 AI 单独复查这一句，标注有变就存回去 */
-  async function reviewOne(id) {
-    const sentence = await repo.getSentence(String(id || ''));
+  async function reviewOne(account, id) {
+    const sentence = await repo.getSentence(account.id, String(id || ''));
     if (!sentence) throw new HttpError(404, '句子不存在');
     let res;
     try {
-      [res] = await reviewMarks([sentence]);
+      [res] = await reviewMarks(await llmFor(account), [sentence]);
     } catch (e) {
       throw toHttpError(e);
     }
     if (res.status !== 'ok') throw new HttpError(502, 'AI 复查的结果对不上原句，再试一次，或者自己点词修改');
     if (!res.changed) return { sentence, changed: false, note: res.note };
-    await repo.updateSegs(sentence.id, res.segs);
-    return { sentence: await repo.getSentence(sentence.id), changed: true, note: res.note };
+    await repo.updateSegs(account.id, sentence.id, res.segs);
+    return { sentence: await repo.getSentence(account.id, sentence.id), changed: true, note: res.note };
   }
 
   /** 自己改谓语：spans 是按整句单词下标标出的 [{kind, a, b}] */
-  async function setMarks(id, spans) {
-    const sentence = await repo.getSentence(String(id || ''));
+  async function setMarks(account, id, spans) {
+    const sentence = await repo.getSentence(account.id, String(id || ''));
     if (!sentence) throw new HttpError(404, '句子不存在');
     if (!Array.isArray(spans) || spans.filter((x) => x?.kind === 'main').length !== 1) {
       throw new HttpError(400, '要标出且只标出一个主句谓语');
@@ -104,27 +110,28 @@ export function createAi({ cfg, llm, log = console }) {
     } catch (e) {
       throw new HttpError(400, e.message);
     }
-    await repo.updateSegs(sentence.id, segs);
-    return { sentence: await repo.getSentence(sentence.id) };
+    await repo.updateSegs(account.id, sentence.id, segs);
+    return { sentence: await repo.getSentence(account.id, sentence.id) };
   }
 
-  async function checkLimit(field, limit, message) {
-    const usage = await repo.getUsage(shanghaiDate());
+  async function checkLimit(account, field, limit, message) {
+    const usage = await repo.getUsage(account.id, shanghaiDate());
     if (usage[field] >= limit) throw new HttpError(429, message.replace('{n}', limit));
   }
 
-  async function grade(sentenceId, rawText) {
+  async function grade(account, sentenceId, rawText) {
     const text = String(rawText ?? '').trim();
     if (!text) throw new HttpError(400, '先写下你的译文');
     if (text.length > 500) throw new HttpError(400, '译文太长了（最多 500 字）');
-    const sentence = await repo.getSentence(String(sentenceId || ''));
+    const sentence = await repo.getSentence(account.id, String(sentenceId || ''));
     if (!sentence) throw new HttpError(404, '句子不存在');
-    await checkLimit('grades', cfg.limits.grade, '今天的批改次数用完了（{n} 次），明天再来');
+    await checkLimit(account, 'grades', cfg.limits.grade, '今天的批改次数用完了（{n} 次），明天再来');
+    const L = await llmFor(account);
 
     let result;
     for (let i = 0; i < 2; i++) {
       try {
-        result = await llm.chatJson({ prompt: gradePrompt(sentence, text), model: cfg.llm.mainModel, maxTokens: 1500 });
+        result = await L.chatJson({ prompt: gradePrompt(sentence, text), model: L.models().main, maxTokens: 1500 });
         break;
       } catch (e) {
         if (e instanceof LlmError && e.code === 'invalid_json' && i === 0) continue;
@@ -141,24 +148,25 @@ export function createAi({ cfg, llm, log = console }) {
       inputTokens: result.usage.input,
       outputTokens: result.usage.output,
     });
-    await repo.bumpUsage(shanghaiDate(), 'grades');
+    await repo.bumpUsage(account.id, shanghaiDate(), 'grades');
     return attempt;
   }
 
-  async function lookup(sentenceId, rawWord) {
+  async function lookup(account, sentenceId, rawWord) {
     const word = String(rawWord ?? '').trim().toLowerCase().replace(/’/g, "'");
     if (!/^[a-z][a-z'-]{0,39}$/.test(word)) throw new HttpError(400, '只能查英文单词');
-    const sentence = await repo.getSentence(String(sentenceId || ''));
+    const sentence = await repo.getSentence(account.id, String(sentenceId || ''));
     if (!sentence) throw new HttpError(404, '句子不存在');
     const cached = await repo.getDict(sentence.id, word);
     if (cached) return { word, data: cached, cached: true };
-    await checkLimit('lookups', cfg.limits.lookup, '今天的查词次数用完了（{n} 次）');
+    await checkLimit(account, 'lookups', cfg.limits.lookup, '今天的查词次数用完了（{n} 次）');
+    const L = await llmFor(account);
 
     let result;
     try {
-      result = await llm.chatJson({
+      result = await L.chatJson({
         prompt: lookupPrompt(sentence, word),
-        model: cfg.llm.lightModel || cfg.llm.mainModel,
+        model: L.models().light,
         maxTokens: 300,
         temperature: 0.1,
         timeoutMs: 30_000,
@@ -170,7 +178,7 @@ export function createAi({ cfg, llm, log = console }) {
     const data = { lemma: str(d.lemma, 40), ipa: str(d.ipa, 40), pos: str(d.pos, 10), zh: str(d.zh, 60), more: str(d.more, 80) };
     if (!data.zh) throw new HttpError(502, '没查到这个词的意思');
     await repo.putDict(sentence.id, word, data);
-    await repo.bumpUsage(shanghaiDate(), 'lookups');
+    await repo.bumpUsage(account.id, shanghaiDate(), 'lookups');
     return { word, data, cached: false };
   }
 
@@ -178,7 +186,7 @@ export function createAi({ cfg, llm, log = console }) {
   const normLevel = (v) => (/6/.test(String(v)) ? 'CET-6' : /4/.test(String(v)) ? 'CET-4' : '');
   const CHUNK = 5; // 一次最多让模型出 5 句，句数多时分几批同时请求，避免回复太长被截断
   const TOPICS = ['科技', '教育', '环境', '健康', '社会', '经济', '文化', '职场', '城市生活', '心理', '历史', '媒体'];
-  let dailyBusy = false;
+  const dailyBusy = new Set(); // 正在生成今日任务的账户
 
   /** 从还缺的句数里取一批（两种难度轮流取），返回这批每句的难度 */
   function takeChunk(need) {
@@ -200,27 +208,28 @@ export function createAi({ cfg, llm, log = console }) {
    * source：daily = 今日任务（不算进手动出题次数），extra = 加练。
    * levels：要出的难度，两种都选时各占一半、顺序随机。句子没通过校验或难度不对时会补出，最多多请求 2 次。
    */
-  async function generate({ source = 'extra', n = 5, levels = LEVELS } = {}) {
+  async function generate(account, { source = 'extra', n = 5, levels = LEVELS } = {}) {
     if (source === 'daily') {
-      if (dailyBusy) throw new HttpError(409, '今天的任务正在生成，稍等一下');
-      dailyBusy = true;
+      if (dailyBusy.has(account.id)) throw new HttpError(409, '今天的任务正在生成，稍等一下');
+      dailyBusy.add(account.id);
     }
     try {
-      if (source !== 'daily') await checkLimit('gens', cfg.limits.generate, '今天加练出题的次数用完了（{n} 次）');
+      if (source !== 'daily') await checkLimit(account, 'gens', cfg.limits.generate, '今天加练出题的次数用完了（{n} 次）');
+      const L = await llmFor(account);
       const day = shanghaiDate();
       const clock = shanghaiClock();
       const now = Date.now();
-      const offset = source === 'daily' ? await repo.countDailyFor(day) : 0;
+      const offset = source === 'daily' ? await repo.countDailyFor(account.id, day) : 0;
       const need = {};
       for (const l of planLevels(n, levels)) need[l] = (need[l] || 0) + 1;
       const accepted = [];
       const reasons = [];
-      const recentDb = await repo.recentSentences(40);
+      const recentDb = await repo.recentSentences(account.id, 40);
       const ask = async (plan, topics) => {
         try {
-          const r = await llm.chatJson({
+          const r = await L.chatJson({
             prompt: generatePrompt(plan, [...accepted, ...recentDb].slice(0, 50), topics),
-            model: cfg.llm.mainModel,
+            model: L.models().main,
             maxTokens: 8000,
             temperature: 0.8,
             timeoutMs: Math.max(cfg.llm.timeoutMs, 180_000),
@@ -242,7 +251,7 @@ export function createAi({ cfg, llm, log = console }) {
         if (!list.length) return list;
         let reviews;
         try {
-          reviews = await reviewMarks(list);
+          reviews = await reviewMarks(L, list);
         } catch (e) {
           reasons.push(`谓语复核没做成：${e.message}`);
           return list;
@@ -309,8 +318,10 @@ export function createAi({ cfg, llm, log = console }) {
       for (const item of shuffleCopy(accepted)) {
         const created = new Date(now + ids.length + 1).toISOString();
         for (let tries = 0; tries < 30; tries++, next++) {
-          const id = source === 'daily' ? `s-${d}-d${next}` : `s-${d}-${clock}-${next}`;
-          if (await repo.insertSentence({ ...item, id, created, batch: day, source })) {
+          // 句子 id 全局唯一：邀请账户的加上账户 id 做前缀，owner 保持原来的格式
+          const base = source === 'daily' ? `s-${d}-d${next}` : `s-${d}-${clock}-${next}`;
+          const id = account.role === 'owner' ? base : `${account.id}-${base}`;
+          if (await repo.insertSentence({ ...item, id, created, batch: day, source, accountId: account.id })) {
             ids.push(id);
             next++;
             break;
@@ -318,10 +329,10 @@ export function createAi({ cfg, llm, log = console }) {
         }
       }
       if (!ids.length) throw new HttpError(502, 'AI 这次出的题都没通过校验，再试一次');
-      if (source !== 'daily') await repo.bumpUsage(day, 'gens');
+      if (source !== 'daily') await repo.bumpUsage(account.id, day, 'gens');
       return ids;
     } finally {
-      if (source === 'daily') dailyBusy = false;
+      if (source === 'daily') dailyBusy.delete(account.id);
     }
   }
 

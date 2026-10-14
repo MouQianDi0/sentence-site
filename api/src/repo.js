@@ -16,80 +16,83 @@ export async function ensureSchema(sql) {
 }
 
 // ---- sentences ---------------------------------------------------------------
-export async function listSentences(since = null) {
+// 句子都按账户隔离：除了全局计数，查询都要带 accountId，取不到别的账户的句子。
+export async function listSentences(accountId, since = null) {
   const { rows } = await query(
     `SELECT ${SENTENCE_COLS} FROM sentences
-     WHERE ($1::timestamptz IS NULL OR created_at > $1::timestamptz)
+     WHERE account_id = $1 AND ($2::timestamptz IS NULL OR created_at > $2::timestamptz)
      ORDER BY created_at, id`,
-    [since],
+    [accountId, since],
   );
   return rows;
 }
 
-export async function getSentence(id) {
-  const { rows } = await query(`SELECT ${SENTENCE_COLS} FROM sentences WHERE id = $1`, [id]);
+export async function getSentence(accountId, id) {
+  const { rows } = await query(`SELECT ${SENTENCE_COLS} FROM sentences WHERE id = $1 AND account_id = $2`, [id, accountId]);
   return rows[0] || null;
 }
 
-export async function recentSentences(limit = 40) {
+export async function recentSentences(accountId, limit = 40) {
   const { rows } = await query(
-    `SELECT ${SENTENCE_COLS} FROM sentences ORDER BY created_at DESC, id DESC LIMIT $1`,
-    [limit],
+    `SELECT ${SENTENCE_COLS} FROM sentences WHERE account_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`,
+    [accountId, limit],
   );
   return rows;
 }
 
+/** 所有账户的句子总数（健康检查、首次启动导入用） */
 export async function countSentences() {
   const { rows } = await query('SELECT count(*)::int AS n FROM sentences');
   return rows[0].n;
 }
 
-export async function hasDailyFor(day) {
-  const { rows } = await query(
-    `SELECT count(*)::int AS n FROM sentences WHERE source = 'daily' AND batch = $1::date`,
-    [day],
-  );
-  return rows[0].n > 0;
+export async function hasDailyFor(accountId, day) {
+  return (await countDailyFor(accountId, day)) > 0;
 }
 
-export async function countDailyFor(day) {
+export async function countDailyFor(accountId, day) {
   const { rows } = await query(
-    `SELECT count(*)::int AS n FROM sentences WHERE source = 'daily' AND batch = $1::date`,
-    [day],
+    `SELECT count(*)::int AS n FROM sentences WHERE account_id = $1 AND source = 'daily' AND batch = $2::date`,
+    [accountId, day],
   );
   return rows[0].n;
 }
 
-/** 已存在同 id 时跳过；返回是否真的插入了 */
+/** 已存在同 id 时跳过；返回是否真的插入了。accountId 不传时归到 owner（导入旧数据用） */
 export async function insertSentence(s) {
   const { rows } = await query(
-    `INSERT INTO sentences (id, created_at, batch, source, level, focus, segs, trunk, trunk_zh, trap, tip, ref, opts, words, phrases)
-     VALUES ($1, $2::timestamptz, $3::date, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb)
+    `INSERT INTO sentences (id, created_at, batch, source, level, focus, segs, trunk, trunk_zh, trap, tip, ref, opts, words, phrases, account_id)
+     VALUES ($1, $2::timestamptz, $3::date, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16)
      ON CONFLICT (id) DO NOTHING
      RETURNING id`,
     [
       s.id, s.created, s.batch, s.source, s.level || null, s.focus || null, json(s.segs),
       s.trunk || null, s.trunkZh || null, s.trap || null, s.tip || null, s.ref || null,
-      json(s.opts), json(s.words || []), json(s.phrases || []),
+      json(s.opts), json(s.words || []), json(s.phrases || []), s.accountId || 'owner',
     ],
   );
   return rows.length > 0;
 }
 
 /** 只改谓语标注（segs）；返回是否找到这句 */
-export async function updateSegs(id, segs) {
-  const { rowCount } = await query('UPDATE sentences SET segs = $2::jsonb WHERE id = $1', [id, json(segs)]);
+export async function updateSegs(accountId, id, segs) {
+  const { rowCount } = await query('UPDATE sentences SET segs = $3::jsonb WHERE id = $1 AND account_id = $2', [id, accountId, json(segs)]);
   return rowCount > 0;
 }
 
-export async function deleteSentence(id) {
-  const { rowCount } = await query('DELETE FROM sentences WHERE id = $1', [id]);
+export async function deleteSentence(accountId, id) {
+  const { rowCount } = await query('DELETE FROM sentences WHERE id = $1 AND account_id = $2', [id, accountId]);
   return rowCount > 0;
 }
 
 // ---- records -----------------------------------------------------------------
-export async function listRecords() {
-  const { rows } = await query(`SELECT ${RECORD_COLS} FROM records ORDER BY updated_at DESC`);
+export async function listRecords(accountId) {
+  const { rows } = await query(
+    `SELECT ${RECORD_COLS} FROM records
+     WHERE sentence_id IN (SELECT id FROM sentences WHERE account_id = $1)
+     ORDER BY updated_at DESC`,
+    [accountId],
+  );
   return rows;
 }
 
@@ -102,7 +105,7 @@ const RECORD_FIELDS = {
   updatedAt: { col: 'updated_at', cast: '::timestamptz', val: (v) => v },
 };
 
-/** 只写传进来的字段；记录不存在时新建。句子不存在时抛出外键错误（23503）。 */
+/** 只写传进来的字段；记录不存在时新建。句子不存在时抛出外键错误（23503）。调用前先确认句子属于当前账户 */
 export async function upsertRecord(sentenceId, fields) {
   const cols = ['sentence_id'];
   const vals = ['$1'];
@@ -132,13 +135,14 @@ export async function countRecords() {
 }
 
 // ---- attempts ----------------------------------------------------------------
-export async function listAttempts(sentenceId = null) {
+export async function listAttempts(accountId, sentenceId = null) {
   const { rows } = await query(
     `SELECT ${ATTEMPT_COLS} FROM attempts
-     WHERE ($1::text IS NULL OR sentence_id = $1)
+     WHERE sentence_id IN (SELECT id FROM sentences WHERE account_id = $1)
+       AND ($2::text IS NULL OR sentence_id = $2)
      ORDER BY created_at DESC, id DESC
      LIMIT 1000`,
-    [sentenceId],
+    [accountId, sentenceId],
   );
   return rows;
 }
@@ -196,22 +200,89 @@ export async function deleteSetting(key) {
   await query('DELETE FROM settings WHERE key = $1', [key]);
 }
 
-// ---- daily usage -------------------------------------------------------------
+// ---- daily usage（按账户分别计数）----------------------------------------------
 const USAGE_FIELDS = ['grades', 'lookups', 'gens'];
 
-export async function getUsage(day) {
+export async function getUsage(accountId, day) {
   const { rows } = await query(
-    'SELECT grades, lookups, gens FROM ai_usage WHERE day = $1::date',
-    [day],
+    'SELECT grades, lookups, gens FROM ai_usage WHERE account_id = $1 AND day = $2::date',
+    [accountId, day],
   );
   return rows[0] || { grades: 0, lookups: 0, gens: 0 };
 }
 
-export async function bumpUsage(day, field) {
+export async function bumpUsage(accountId, day, field) {
   if (!USAGE_FIELDS.includes(field)) throw new Error(`unknown usage field ${field}`);
   await query(
-    `INSERT INTO ai_usage (day, ${field}) VALUES ($1::date, 1)
-     ON CONFLICT (day) DO UPDATE SET ${field} = ai_usage.${field} + 1`,
-    [day],
+    `INSERT INTO ai_usage (account_id, day, ${field}) VALUES ($1, $2::date, 1)
+     ON CONFLICT (account_id, day) DO UPDATE SET ${field} = ai_usage.${field} + 1`,
+    [accountId, day],
   );
+}
+
+// ---- accounts ----------------------------------------------------------------
+const ACCOUNT_COLS = `id, role, note, code_hash AS "codeHash", code_enc AS "codeEnc", practice,
+  to_json(created_at)#>>'{}' AS "createdAt", to_json(last_seen_at)#>>'{}' AS "lastSeenAt"`;
+
+export async function getAccount(id) {
+  const { rows } = await query(`SELECT ${ACCOUNT_COLS} FROM accounts WHERE id = $1`, [id]);
+  return rows[0] || null;
+}
+
+export async function findAccountByCode(codeHash) {
+  const { rows } = await query(`SELECT ${ACCOUNT_COLS} FROM accounts WHERE code_hash = $1 AND role = 'member'`, [codeHash]);
+  return rows[0] || null;
+}
+
+/** 邀请账户，新建的在前 */
+export async function listMembers() {
+  const { rows } = await query(`SELECT ${ACCOUNT_COLS} FROM accounts WHERE role = 'member' ORDER BY created_at DESC, id DESC`);
+  return rows;
+}
+
+/** 每日自动出题要照顾的账户：owner，加上最近 days 天里登录过的邀请账户 */
+export async function listActiveAccounts(days = 7) {
+  const { rows } = await query(
+    `SELECT ${ACCOUNT_COLS} FROM accounts
+     WHERE role = 'owner' OR last_seen_at > now() - ($1::int * interval '1 day')
+     ORDER BY role DESC, created_at`,
+    [days],
+  );
+  return rows;
+}
+
+/** 新建邀请账户；邀请码撞上已有的返回 false */
+export async function insertMember({ id, note, codeHash, codeEnc }) {
+  const { rows } = await query(
+    `INSERT INTO accounts (id, role, note, code_hash, code_enc)
+     VALUES ($1, 'member', $2, $3, $4)
+     ON CONFLICT DO NOTHING
+     RETURNING id`,
+    [id, note, codeHash, codeEnc],
+  );
+  return rows.length > 0;
+}
+
+/** 邀请账户自己的模型配置（没配过返回 null） */
+export async function getAccountLlm(id) {
+  const { rows } = await query('SELECT llm FROM accounts WHERE id = $1', [id]);
+  return rows[0]?.llm ?? null;
+}
+
+export async function setAccountLlm(id, value) {
+  await query('UPDATE accounts SET llm = $2::jsonb WHERE id = $1', [id, json(value)]);
+}
+
+/** 删除邀请账户，连带它的句子、记录、批改、查词缓存和用量 */
+export async function deleteMember(id) {
+  const { rowCount } = await query(`DELETE FROM accounts WHERE id = $1 AND role = 'member'`, [id]);
+  return rowCount > 0;
+}
+
+export async function setPractice(id, practice) {
+  await query('UPDATE accounts SET practice = $2::jsonb WHERE id = $1', [id, json(practice)]);
+}
+
+export async function touchAccount(id) {
+  await query('UPDATE accounts SET last_seen_at = now() WHERE id = $1', [id]);
 }

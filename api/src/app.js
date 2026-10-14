@@ -6,8 +6,9 @@ import { HttpError, send, readJson, parseCookies, clientIp, isHttps } from './ht
 import { checkRecordPatch } from './validate.js';
 import { createAi, toHttpError } from './ai.js';
 import { createLlm, LlmError } from './llm.js';
-import { createSettings } from './settings.js';
+import { createSettings, createSettingsHub } from './settings.js';
 import { createPractice, MAX_DAILY } from './practice.js';
+import { createAccounts, memberVersion } from './accounts.js';
 import { shanghaiDate } from './time.js';
 
 /** 连接测试没拿到 JSON 时，告诉用户该怎么改 */
@@ -24,18 +25,20 @@ function testHint(why, c) {
     : '连上了，但模型没有按 JSON 格式回复。可以试试打开“JSON 输出模式”，或者换一个模型';
 }
 
-export function createApp(cfg, { llm = createLlm(cfg), settings = null, practice = null, ai: aiIn = null, log = console } = {}) {
+export function createApp(cfg, { llm = createLlm(cfg), settings = null, practice = null, hub: hubIn = null, ai: aiIn = null, log = console } = {}) {
   const auth = createAuth(cfg);
-  const ai = aiIn || createAi({ cfg, llm, log });
+  const accounts = createAccounts(cfg);
   const router = createRouter();
   const pub = { public: true };
+  const ownerOnly = { owner: true }; // 只有你自己（访问密码登录的账户）能用
   // 没有从外面传入时自己读取一次数据库里的模型配置
   const settingsSvc = settings || createSettings(cfg);
+  // 模型配置按账户：你自己用 settingsSvc / llm，邀请账户各用各的（只用它自己填的 API 密钥）
+  const hub = hubIn || createSettingsHub(cfg, { ownerSvc: settingsSvc, ownerLlm: llm, createLlm });
+  const ai = aiIn || createAi({ cfg, llm, llmFor: hub.llmFor, log });
   const practiceSvc = practice || createPractice(cfg);
-  const settingsReady = Promise.all([
-    settings ? null : settingsSvc.load().catch((e) => log.error('[settings]', e.message)),
-    practice ? null : practiceSvc.load().catch((e) => log.error('[practice]', e.message)),
-  ]);
+  const settingsReady = settings ? Promise.resolve() : settingsSvc.load().catch((e) => log.error('[settings]', e.message));
+  const sessionOf = (req) => accounts.resolve(auth.verify(parseCookies(req.headers.cookie)[COOKIE_NAME]), auth.ownerVersion);
 
   // ---- 不需要密码 -------------------------------------------------------------
   router.add('GET', '/api/health', async () => {
@@ -47,17 +50,24 @@ export function createApp(cfg, { llm = createLlm(cfg), settings = null, practice
     }
   }, pub);
 
-  router.add('GET', '/api/session', async ({ req }) => ({
-    body: { unlocked: auth.verify(parseCookies(req.headers.cookie)[COOKIE_NAME]) },
-  }), pub);
+  // role：owner 是你自己，member 是邀请账户；name：邀请账户的备注名
+  const me = (acc) => ({ unlocked: true, role: acc.role, name: acc.role === 'owner' ? '' : acc.note });
 
+  router.add('GET', '/api/session', async ({ req }) => {
+    const acc = await sessionOf(req);
+    return { body: acc ? me(acc) : { unlocked: false } };
+  }, pub);
+
+  // password 可以是访问密码，也可以是邀请码
   router.add('POST', '/api/unlock', async ({ req }) => {
     const body = await readJson(req);
-    const r = auth.tryPassword(clientIp(req), body.password);
-    if (r.locked) throw new HttpError(429, `密码输错次数太多，请 ${r.locked} 分钟后再试`);
-    if (!r.ok) throw new HttpError(401, `密码不对，还可以再试 ${r.left} 次`);
+    const r = await auth.tryLogin(clientIp(req), body.password, accounts.findByCode);
+    if (r.locked) throw new HttpError(429, `输错次数太多，请 ${r.locked} 分钟后再试`);
+    if (!r.ok) throw new HttpError(401, `密码或邀请码不对，还可以再试 ${r.left} 次`);
     const secure = cfg.cookieSecure || isHttps(req);
-    return { body: { ok: true }, headers: { 'Set-Cookie': auth.cookie(auth.issue(), secure) } };
+    const token = r.account === 'owner' ? auth.issue() : auth.issue(r.account.id, memberVersion(r.account));
+    const acc = r.account === 'owner' ? { role: 'owner' } : r.account;
+    return { body: { ok: true, ...me(acc) }, headers: { 'Set-Cookie': auth.cookie(token, secure) } };
   }, pub);
 
   router.add('POST', '/api/lock', async () => ({
@@ -66,43 +76,45 @@ export function createApp(cfg, { llm = createLlm(cfg), settings = null, practice
   }), pub);
 
   // ---- 句库 -------------------------------------------------------------------
-  router.add('GET', '/api/sentences', async ({ url }) => {
+  // ---- 下面的接口都只读写当前登录账户自己的数据 ----------------------------------
+  router.add('GET', '/api/sentences', async ({ url, account }) => {
     const since = url.searchParams.get('since');
     if (since && Number.isNaN(Date.parse(since))) throw new HttpError(400, 'since 不是合法的时间');
-    return { body: { sentences: await repo.listSentences(since || null) } };
+    return { body: { sentences: await repo.listSentences(account.id, since || null) } };
   });
 
-  router.add('DELETE', '/api/sentences/:id', async ({ params }) => {
-    if (!(await repo.deleteSentence(params.id))) throw new HttpError(404, '句子不存在');
+  router.add('DELETE', '/api/sentences/:id', async ({ params, account }) => {
+    if (!(await repo.deleteSentence(account.id, params.id))) throw new HttpError(404, '句子不存在');
     return { body: { ok: true } };
   });
 
   // 谓语标错了：自己按单词位置改（spans），或者让 AI 复查这一句
-  router.add('PUT', '/api/sentences/:id/predicates', async ({ req, params }) => ({
-    body: await ai.setMarks(params.id, (await readJson(req)).spans),
+  router.add('PUT', '/api/sentences/:id/predicates', async ({ req, params, account }) => ({
+    body: await ai.setMarks(account, params.id, (await readJson(req)).spans),
   }));
-  router.add('POST', '/api/sentences/:id/review', async ({ params }) => ({ body: await ai.reviewOne(params.id) }));
+  router.add('POST', '/api/sentences/:id/review', async ({ params, account }) => ({ body: await ai.reviewOne(account, params.id) }));
 
   // kind=daily：生成（或补齐）今日任务；kind=extra（默认）：加练 count 句（1–10）。难度按“每日任务”设置
-  router.add('POST', '/api/sentences/generate', async ({ req }) => {
+  router.add('POST', '/api/sentences/generate', async ({ req, account }) => {
     const body = await readJson(req);
-    const p = practiceSvc.get();
+    const p = practiceSvc.get(account);
     if (body.kind === 'daily') {
-      const n = p.dailyCount - (await repo.countDailyFor(shanghaiDate()));
+      const n = p.dailyCount - (await repo.countDailyFor(account.id, shanghaiDate()));
       if (n <= 0) throw new HttpError(409, '今天的任务已经生成好了');
-      return { body: { added: await ai.generate({ source: 'daily', n, levels: p.levels }) } };
+      return { body: { added: await ai.generate(account, { source: 'daily', n, levels: p.levels }) } };
     }
     const n = body.count === undefined ? 5 : Number(body.count);
     if (!Number.isInteger(n) || n < 1 || n > MAX_DAILY) throw new HttpError(400, `一次加练 1–${MAX_DAILY} 句`);
-    return { body: { added: await ai.generate({ source: 'extra', n, levels: p.levels }) } };
+    return { body: { added: await ai.generate(account, { source: 'extra', n, levels: p.levels }) } };
   });
 
   // ---- 练习记录 ---------------------------------------------------------------
-  router.add('GET', '/api/records', async () => ({ body: { records: await repo.listRecords() } }));
+  router.add('GET', '/api/records', async ({ account }) => ({ body: { records: await repo.listRecords(account.id) } }));
 
-  router.add('PUT', '/api/records/:sentenceId', async ({ req, params }) => {
+  router.add('PUT', '/api/records/:sentenceId', async ({ req, params, account }) => {
     const checked = checkRecordPatch(await readJson(req));
     if (checked.error) throw new HttpError(400, checked.error);
+    if (!(await repo.getSentence(account.id, params.sentenceId))) throw new HttpError(404, '句子不存在');
     try {
       return { body: { record: await repo.upsertRecord(params.sentenceId, checked.fields) } };
     } catch (e) {
@@ -112,49 +124,62 @@ export function createApp(cfg, { llm = createLlm(cfg), settings = null, practice
   });
 
   // ---- 批改、查词 -------------------------------------------------------------
-  router.add('GET', '/api/attempts', async ({ url }) => ({
-    body: { attempts: await repo.listAttempts(url.searchParams.get('sentenceId') || null) },
+  router.add('GET', '/api/attempts', async ({ url, account }) => ({
+    body: { attempts: await repo.listAttempts(account.id, url.searchParams.get('sentenceId') || null) },
   }));
 
-  router.add('POST', '/api/grade', async ({ req }) => {
+  router.add('POST', '/api/grade', async ({ req, account }) => {
     const body = await readJson(req);
-    return { body: { attempt: await ai.grade(body.sentenceId, body.text) } };
+    return { body: { attempt: await ai.grade(account, body.sentenceId, body.text) } };
   });
 
-  router.add('POST', '/api/lookup', async ({ req }) => {
+  router.add('POST', '/api/lookup', async ({ req, account }) => {
     const body = await readJson(req);
-    return { body: await ai.lookup(body.sentenceId, body.word) };
+    return { body: await ai.lookup(account, body.sentenceId, body.word) };
   });
 
-  router.add('GET', '/api/usage', async () => {
+  router.add('GET', '/api/usage', async ({ account }) => {
     const day = shanghaiDate();
     return {
       body: {
         day,
-        ...(await repo.getUsage(day)),
+        ...(await repo.getUsage(account.id, day)),
         limits: { grade: cfg.limits.grade, lookup: cfg.limits.lookup, generate: cfg.limits.generate },
-        aiReady: llm.ready(),
+        aiReady: (await hub.llmFor(account)).ready(),
       },
     };
   });
 
-  // ---- 每日任务设置 -----------------------------------------------------------
-  router.add('GET', '/api/settings/practice', async () => ({ body: practiceSvc.get() }));
-  router.add('PUT', '/api/settings/practice', async ({ req }) => ({ body: await practiceSvc.save(await readJson(req)) }));
+  // ---- 每日任务设置（每个账户自己的）---------------------------------------------
+  router.add('GET', '/api/settings/practice', async ({ account }) => ({ body: practiceSvc.get(account) }));
+  router.add('PUT', '/api/settings/practice', async ({ req, account }) => ({ body: await practiceSvc.save(account, await readJson(req)) }));
 
-  // ---- 模型设置 ---------------------------------------------------------------
-  router.add('GET', '/api/settings/llm', async () => ({ body: settingsSvc.view() }));
+  // ---- 邀请码管理（只有你自己能用）------------------------------------------------
+  router.add('GET', '/api/admin/invites', async () => ({ body: { invites: await accounts.list() } }), ownerOnly);
+  // {note}：备注名
+  router.add('POST', '/api/admin/invites', async ({ req }) => ({ body: { invite: await accounts.create(await readJson(req)) } }), ownerOnly);
+  // 删除邀请码 = 删除这个账户和它的全部数据（包括它自己填的模型配置）
+  router.add('DELETE', '/api/admin/invites/:id', async ({ params }) => {
+    await accounts.remove(params.id);
+    hub.drop(params.id);
+    return { body: { ok: true } };
+  }, ownerOnly);
 
-  router.add('PUT', '/api/settings/llm', async ({ req }) => ({ body: await settingsSvc.save(await readJson(req)) }));
+  // ---- 模型设置（每个账户自己的；邀请账户没有 .env 可用，只能用自己填的 API 密钥）----------
+  const svcOf = async (account) => (await hub.get(account)).svc;
+  router.add('GET', '/api/settings/llm', async ({ account }) => ({ body: (await svcOf(account)).view() }));
+
+  router.add('PUT', '/api/settings/llm', async ({ req, account }) => ({ body: await (await svcOf(account)).save(await readJson(req)) }));
 
   // ?provider=deepseek 删除这个平台的配置；不带参数表示改回使用 .env（各平台保存的配置保留）
-  router.add('DELETE', '/api/settings/llm', async ({ url }) => ({ body: await settingsSvc.reset(url.searchParams.get('provider') || null) }));
+  router.add('DELETE', '/api/settings/llm', async ({ url, account }) => ({ body: await (await svcOf(account)).reset(url.searchParams.get('provider') || null) }));
 
   // 用填写的配置（还没保存也可以）试着调用一次模型
-  router.add('POST', '/api/settings/llm/test', async ({ req }) => {
-    const c = settingsSvc.candidate(await readJson(req));
+  router.add('POST', '/api/settings/llm/test', async ({ req, account }) => {
+    const svc = await svcOf(account);
+    const c = svc.candidate(await readJson(req));
     if (!c.baseUrl) throw new HttpError(400, '请填写接口地址');
-    if (!c.apiKey) throw new HttpError(400, settingsSvc.keyError(c));
+    if (!c.apiKey) throw new HttpError(400, svc.keyError(c));
     if (!c.mainModel) throw new HttpError(400, '请填写主力模型');
     const probe = createLlm({ llm: c });
     const results = [];
@@ -183,9 +208,10 @@ export function createApp(cfg, { llm = createLlm(cfg), settings = null, practice
     return { body: { ok: results.every((r) => r.ok), results } };
   });
 
-  router.add('POST', '/api/settings/llm/models', async ({ req }) => {
-    const c = settingsSvc.candidate(await readJson(req));
-    if (c.baseUrl && !c.apiKey) throw new HttpError(400, settingsSvc.keyError(c));
+  router.add('POST', '/api/settings/llm/models', async ({ req, account }) => {
+    const svc = await svcOf(account);
+    const c = svc.candidate(await readJson(req));
+    if (c.baseUrl && !c.apiKey) throw new HttpError(400, svc.keyError(c));
     try {
       return { body: { models: await createLlm({ llm: c }).listModels() } };
     } catch (e) {
@@ -209,10 +235,20 @@ export function createApp(cfg, { llm = createLlm(cfg), settings = null, practice
       if (!found.route) {
         throw found.pathMatched ? new HttpError(405, '不支持这个请求方法') : new HttpError(404, '接口不存在');
       }
-      if (!found.route.opts.public && !auth.verify(parseCookies(req.headers.cookie)[COOKIE_NAME])) {
-        throw new HttpError(401, '需要先输入访问密码');
+      const account = found.route.opts.public ? null : await sessionOf(req);
+      if (!found.route.opts.public && !account) throw new HttpError(401, '需要先输入访问密码或邀请码');
+      if (found.route.opts.owner && account.role !== 'owner') throw new HttpError(403, '只有管理员可以使用这个功能');
+      let out;
+      try {
+        out = (await found.route.handler({ req, res, url, params: found.params, account })) || {};
+      } catch (e) {
+        // 邀请账户没有 .env 可用，提示里去掉 .env
+        if (account?.role === 'member' && e instanceof HttpError && e.status === 503 && /还没配置 AI 模型/.test(e.message)) {
+          throw new HttpError(503, '还没配置 AI 模型：到“设置”页填写你自己的模型和 API 密钥');
+        }
+        throw e;
       }
-      const out = (await found.route.handler({ req, res, url, params: found.params })) || {};
+      out = out || {};
       status = out.status || 200;
       send(res, status, out.body ?? {}, out.headers);
     } catch (e) {

@@ -6,6 +6,7 @@ import * as speech from './speech.js';
 import * as A from './anim.js';
 import { createSettingsView } from './settings.js';
 import { createTaskSettings, levelText } from './practice.js';
+import { createInvites, accountHTML } from './invites.js';
 
 const $ = (id) => document.getElementById(id);
 const ls = {
@@ -58,6 +59,7 @@ let ui = ls.get(LS_UI, {}) || {};
 let dictCache = ls.get(LS_DICT, {}) || {};
 let view = ['records', 'settings'].includes(ui.view) ? ui.view : 'practice';
 let loaded = false;
+let me = null; // 当前登录的账户：{ role: 'owner' | 'member', name }
 
 let cur = null;
 let step = 1;
@@ -709,10 +711,15 @@ function renderViews() {
     $(id).classList.toggle('flex', view === name);
   }
   if (view === 'records') renderRecords();
-  if (view === 'settings' && !settingsOpened) {
+  // 要等知道是哪个账户之后再打开设置页（刷新时停在设置页的情况）
+  if (view === 'settings' && !settingsOpened && me) {
     settingsOpened = true;
     taskSettings.open();
+    // 邀请码管理只有你自己（访问密码登录）看得到；模型设置每个账户都有，各填各的
+    if (me?.role === 'owner') invitesView.open();
+    else $('inviteSettings').innerHTML = '';
     settingsView.open();
+    $('accountSettings').innerHTML = me ? accountHTML(me) : '';
   }
 }
 
@@ -1280,10 +1287,16 @@ $('lockForm').addEventListener('submit', async (e) => {
   btn.disabled = true;
   err.classList.add('hidden');
   try {
-    await api.unlock($('lockInput').value);
+    const r = await api.unlock($('lockInput').value);
     $('lockInput').value = '';
+    // 页面上已经有别的账户（或过期前）的数据时，整页刷新，免得混在一起
+    if (loaded) {
+      location.reload();
+      return;
+    }
+    me = r;
     showLock(false);
-    if (!loaded) await start();
+    await start();
   } catch (ex) {
     err.textContent = ex.message;
     err.classList.remove('hidden');
@@ -1570,6 +1583,18 @@ const taskSettings = createTaskSettings({
     renderTask();
   },
 });
+const invitesView = createInvites({ root: $('inviteSettings'), toast });
+$('accountSettings').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-act="logout"]');
+  if (!b) return;
+  b.disabled = true;
+  try {
+    await api.lock();
+  } catch {
+    // 退出失败也照样回到登录页
+  }
+  location.reload();
+});
 const settingsView = createSettingsView({
   root: $('llmSettings'),
   toast,
@@ -1606,8 +1631,10 @@ renderAll(false);
 api
   .session()
   .then((s) => {
-    if (s.unlocked) start();
-    else showLock(true);
+    if (s.unlocked) {
+      me = s;
+      start();
+    } else showLock(true);
   })
   .catch((e) => {
     $('sentence').innerHTML = `<span class="font-zh text-[15px] text-bad">${esc(e.message)}</span>`;

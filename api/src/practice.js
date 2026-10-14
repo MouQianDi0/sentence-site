@@ -1,8 +1,7 @@
-// 练习设置：每天的任务出几句（1–10）、出四级还是六级（可以都选，混合随机）。存在 settings 表里。
+// 练习设置：每天的任务出几句（1–10）、出四级还是六级（可以都选，混合随机）。每个账户各存一份（accounts.practice）。
 import * as repo from './repo.js';
 import { HttpError } from './http.js';
 
-const KEY = 'practice';
 export const LEVELS = ['CET-4', 'CET-6'];
 export const MAX_DAILY = 10;
 
@@ -13,7 +12,6 @@ const clampCount = (n, d) => {
 
 export function createPractice(cfg) {
   const defaults = { levels: [...LEVELS], dailyCount: clampCount(cfg.daily?.count, 5) };
-  let current = { ...defaults };
 
   function normalize(raw = {}, base = defaults) {
     const levels = Array.isArray(raw.levels) ? LEVELS.filter((l) => raw.levels.includes(l)) : base.levels;
@@ -23,11 +21,16 @@ export function createPractice(cfg) {
     };
   }
 
-  async function load() {
-    current = normalize((await repo.getSetting(KEY)) || {});
+  // dailyAt：每天自动生成的时间（北京时间）；autoDaily：有没有开自动生成
+  const dailyAt = `${cfg.daily?.hour ?? 7}:${String(cfg.daily?.minute ?? 50).padStart(2, '0')}`;
+
+  /** account：accounts 表里的一行（带 practice 字段） */
+  function get(account) {
+    const cur = normalize(account?.practice || {});
+    return { ...cur, levels: [...cur.levels], maxDaily: MAX_DAILY, dailyAt, autoDaily: cfg.daily?.enabled !== false };
   }
 
-  async function save(body = {}) {
+  async function save(account, body = {}) {
     if ('levels' in body && (!Array.isArray(body.levels) || !LEVELS.some((l) => body.levels.includes(l)))) {
       throw new HttpError(400, '至少选一个：四级或六级');
     }
@@ -35,16 +38,13 @@ export function createPractice(cfg) {
       const n = Number(body.dailyCount);
       if (!Number.isInteger(n) || n < 1 || n > MAX_DAILY) throw new HttpError(400, `每天的句数要在 1–${MAX_DAILY} 之间`);
     }
-    current = normalize(body, current);
-    await repo.putSetting(KEY, current);
-    return get();
+    const next = normalize(body, normalize(account.practice || {}));
+    await repo.setPractice(account.id, next);
+    account.practice = next;
+    return get(account);
   }
 
-  // dailyAt：每天自动生成的时间（北京时间）；autoDaily：有没有开自动生成
-  const dailyAt = `${cfg.daily?.hour ?? 7}:${String(cfg.daily?.minute ?? 50).padStart(2, '0')}`;
-  const get = () => ({ ...current, levels: [...current.levels], maxDaily: MAX_DAILY, dailyAt, autoDaily: cfg.daily?.enabled !== false });
-
-  return { load, get, save };
+  return { get, save };
 }
 
 /**

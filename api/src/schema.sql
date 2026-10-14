@@ -60,3 +60,38 @@ CREATE TABLE IF NOT EXISTS settings (
 -- 升级旧数据库：允许加练（extra）的句子。每次启动都会执行，重复执行没有影响
 ALTER TABLE sentences DROP CONSTRAINT IF EXISTS sentences_source_check;
 ALTER TABLE sentences ADD CONSTRAINT sentences_source_check CHECK (source IN ('seed','daily','manual','extra'));
+
+-- ---- 账户：你自己（owner，用访问密码登录）+ 邀请账户（member，用邀请码登录）--------------
+-- 每个账户的句库、练习记录、批改、查词缓存、AI 用量、每日任务设置和模型配置都互相独立；删除账户会连带删除它的全部数据。
+CREATE TABLE IF NOT EXISTS accounts (
+  id           text PRIMARY KEY,                -- 你自己固定是 owner；邀请账户是 m 开头的随机串
+  role         text NOT NULL CHECK (role IN ('owner','member')),
+  note         text NOT NULL DEFAULT '',        -- 备注名
+  code_hash    text UNIQUE,                     -- 邀请码的 sha256（登录时按它查找）
+  code_enc     text,                            -- 邀请码密文（管理页显示用，COOKIE_SECRET 加密）
+  llm          jsonb,                           -- 邀请账户自己的模型配置（格式同 settings 表的 llm，API 密钥加密）；你自己的在 settings 表
+  practice     jsonb,                           -- 每日任务设置 {levels,dailyCount}
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  last_seen_at timestamptz
+);
+INSERT INTO accounts (id, role, note) VALUES ('owner', 'owner', '我') ON CONFLICT (id) DO NOTHING;
+
+-- 已有数据全部归到 owner
+ALTER TABLE sentences ADD COLUMN IF NOT EXISTS account_id text NOT NULL DEFAULT 'owner' REFERENCES accounts(id) ON DELETE CASCADE;
+CREATE INDEX IF NOT EXISTS sentences_account_idx ON sentences (account_id, created_at);
+ALTER TABLE ai_usage ADD COLUMN IF NOT EXISTS account_id text NOT NULL DEFAULT 'owner' REFERENCES accounts(id) ON DELETE CASCADE;
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM information_schema.key_column_usage
+    WHERE table_name = 'ai_usage' AND constraint_name = 'ai_usage_pkey' AND column_name = 'account_id'
+  ) THEN
+    ALTER TABLE ai_usage DROP CONSTRAINT IF EXISTS ai_usage_pkey;
+    ALTER TABLE ai_usage ADD PRIMARY KEY (account_id, day);
+  END IF;
+END $$;
+
+-- 旧版把每日任务设置存在 settings 表的 practice 里，搬到 owner 账户上
+UPDATE accounts SET practice = (SELECT value FROM settings WHERE key = 'practice')
+  WHERE id = 'owner' AND practice IS NULL AND EXISTS (SELECT 1 FROM settings WHERE key = 'practice');
+DELETE FROM settings WHERE key = 'practice' AND EXISTS (SELECT 1 FROM accounts WHERE id = 'owner' AND practice IS NOT NULL);

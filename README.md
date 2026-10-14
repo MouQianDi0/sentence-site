@@ -48,6 +48,16 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 
 第一次启动时，数据库里还没有句子，api 会自动导入旧版页面导出的句子和练习记录（`api/seed/export.json`）。
 
+## 邀请码账户
+
+用访问密码登录的是你自己的账户（管理员）。在“设置”页的“邀请码”里填个备注名、点“生成邀请码”，把邀请码（形如 `7H88-WVP7`）发给对方，对方在登录页输入邀请码就能用，大小写和横线都不影响。
+
+- 每个邀请码对应一个独立账户：句库、练习记录、批改历史、每日任务设置和模型配置都和你的分开，互相看不到。
+- 邀请账户用 AI（批改、查词、出题）时，用的是它自己在“设置”里填的模型和 API 密钥，不会用到你的；没填之前只能做已有的题。每天的批改、查词、加练次数上限和你一样（`.env` 里的 `DAILY_*_LIMIT`），各自单独计数。
+- 只有你能生成、查看、删除邀请码；邀请账户的设置页里没有这一块。删除邀请码会立刻让对方退出，并删除这个账户和它的全部数据，不能恢复。
+- 每天 7:50 的自动出题会照顾你自己和最近 7 天登录过、配好了模型的邀请账户；很久没来的账户回来后在练习页点一下就能生成。
+- 设置页最下面有“退出登录”，可以换一个账户登录。
+
 ## 全新服务器
 
 先运行 `sudo bash scripts/setup.sh`，它会装好 Docker、生成带随机密码的 `.env` 并设置每日备份；然后按上面“第一次接入”的步骤接到 GitHub。也可以手动 `cp .env.example .env` 再改。
@@ -75,7 +85,7 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 
 ## 配置国内大模型
 
-打开网站，点右上角的“设置”：
+每个账户各配各的。打开网站，点右上角的“设置”：
 
 1. 选平台（DeepSeek、通义千问、智谱 GLM、Kimi，或“其他平台”自己填接口地址）
 2. 粘贴 API 密钥
@@ -86,7 +96,7 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 
 每个平台的接口地址、密钥、模型和开关分开保存：点平台就能切换，点“保存并使用”就换成这个平台，不用重新填密钥；已经保存过密钥的平台旁边有个绿点。改了接口地址的域名时要重新填密钥，免得把一个平台的密钥发到别的地址。
 
-密钥加密后存在服务器的数据库里，页面上只显示打码后的样子。网页上保存的配置优先于 `.env`；在设置页点“改回使用服务器 .env 里的配置”可以撤销（各平台保存的配置还留着），也可以单独删除某个平台的配置。
+密钥加密后存在服务器的数据库里，页面上只显示打码后的样子。网页上保存的配置优先于 `.env`；在设置页点“改回使用服务器 .env 里的配置”可以撤销（各平台保存的配置还留着），也可以单独删除某个平台的配置。`.env` 里的模型配置只给你自己的账户用，邀请账户用不到。
 
 也可以继续用 `.env` 配置（写法见 `.env.example`），改完执行 `sudo docker compose up -d --force-recreate api`。注意：网页保存的密钥用 `COOKIE_SECRET` 加密，改了 `COOKIE_SECRET` 之后要在设置页重新填一次密钥。
 
@@ -100,10 +110,15 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 
 ## 接口
 
+除了登录相关的接口，其他接口都只读写当前登录账户自己的数据。
+
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
-| POST | /api/unlock | 输入访问密码，换 30 天有效的 Cookie（连续错 5 次锁 15 分钟） |
-| GET | /api/session | 是否已解锁 |
+| POST | /api/unlock | 输入访问密码或邀请码，换 30 天有效的 Cookie（连续错 5 次锁 15 分钟） |
+| POST | /api/lock | 退出登录 |
+| GET | /api/session | 是否已登录、是哪种账户（`role`：owner 是你自己，member 是邀请账户；`name`：备注名） |
+| GET / POST | /api/admin/invites | 只有你自己能用：列出邀请码（含邀请码原文、创建时间、最近使用）；`{"note":"小王"}` 生成一个 |
+| DELETE | /api/admin/invites/:id | 只有你自己能用：删除邀请码，连带删除这个账户和它的全部数据 |
 | GET | /api/sentences?since= | 句库（带 since 只返回更新的） |
 | POST | /api/sentences/generate | `{"kind":"daily"}` 生成或补齐今日任务；`{"kind":"extra","count":3}` 加练 1–10 句 |
 | GET / PUT | /api/settings/practice | 每日任务设置：`levels`（CET-4 / CET-6，可多选）、`dailyCount`（1–10） |
@@ -116,7 +131,7 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 | POST | /api/grade | AI 批改 |
 | POST | /api/lookup | AI 查词（结果缓存在数据库） |
 | GET | /api/usage | 今天的 AI 用量和上限 |
-| GET / PUT / DELETE | /api/settings/llm | 读取各平台配置；保存某个平台并切换过去（`provider` 字段）；`?provider=` 删除某个平台，不带参数改回 .env（密钥只返回打码后的） |
+| GET / PUT / DELETE | /api/settings/llm | 当前账户自己的模型配置。读取各平台配置；保存某个平台并切换过去（`provider` 字段）；`?provider=` 删除某个平台，不带参数改回 .env（密钥只返回打码后的） |
 | POST | /api/settings/llm/test | 用填写的配置测试连接（不保存） |
 | POST | /api/settings/llm/models | 获取平台的模型列表 |
 | GET | /api/health | 健康检查 |

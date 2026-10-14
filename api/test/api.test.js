@@ -88,19 +88,20 @@ test('没输密码时只能访问公开接口', async () => {
   assert.deepEqual((await app.api('GET', '/api/session')).body, { unlocked: false });
   const r = await app.api('GET', '/api/sentences');
   assert.equal(r.status, 401);
-  assert.match(r.body.error, /访问密码/);
+  assert.match(r.body.error, /访问密码或邀请码/);
   assert.equal((await app.api('GET', '/api/nope')).status, 404);
 });
 
 test('密码错误会提示剩余次数，输对后拿到 Cookie', async () => {
   const wrong = await app.api('POST', '/api/unlock', { password: 'nope' });
   assert.equal(wrong.status, 401);
-  assert.match(wrong.body.error, /还可以再试 4 次/);
+  assert.match(wrong.body.error, /密码或邀请码不对，还可以再试 4 次/);
   const ok = await app.api('POST', '/api/unlock', { password: 'open-sesame-42' });
   assert.equal(ok.status, 200);
   const cookie = ok.headers.get('set-cookie');
   assert.match(cookie, /^ss_session=[^;]+; Path=\/; HttpOnly; SameSite=Lax; Max-Age=2592000$/);
-  assert.deepEqual((await app.api('GET', '/api/session')).body, { unlocked: true });
+  assert.deepEqual(ok.body, { ok: true, unlocked: true, role: 'owner', name: '' });
+  assert.deepEqual((await app.api('GET', '/api/session')).body, { unlocked: true, role: 'owner', name: '' });
 });
 
 test('伪造或篡改的 Cookie 无效', async () => {
@@ -252,11 +253,11 @@ test('出题：不合格的句子被丢掉，不足时补一轮，新句子出�
 
 test('每日出题：今天已经出过就不再出', async () => {
   generateReplyGetter = () => ({ sentences: [sentenceFor(11), sentenceFor(12), sentenceFor(13), sentenceFor(14), sentenceFor(15)] });
-  const ids = await ai.generate({ source: 'daily', n: 5, levels: ['CET-4'] });
+  const ids = await ai.generate(await repo.getAccount('owner'), { source: 'daily', n: 5, levels: ['CET-4'] });
   assert.equal(ids.length, 5);
   assert.match(ids[0], /^s-\d{8}-d1$/);
   const today = (await app.api('GET', '/api/sentences')).body.sentences.at(-1).batch;
-  assert.equal(await repo.hasDailyFor(today), true);
+  assert.equal(await repo.hasDailyFor('owner', today), true);
 });
 
 test('删除句子会连带删除它的练习记录', async () => {
@@ -316,8 +317,7 @@ test('每日任务设置：默认值、校验、保存后重启还在', async ()
   r = await app.api('PUT', '/api/settings/practice', { levels: ['CET-6', 'CET-4'], dailyCount: 7 });
   assert.deepEqual(r.body, { levels: ['CET-4', 'CET-6'], dailyCount: 7, maxDaily: 10, dailyAt: '7:50', autoDaily: true });
   const p2 = createPractice(cfg);
-  await p2.load();
-  assert.equal(p2.get().dailyCount, 7);
+  assert.equal(p2.get(await repo.getAccount('owner')).dailyCount, 7);
 });
 
 test('加练：四六级混合，超过 5 句分两次请求，句子打乱顺序', async () => {
@@ -414,9 +414,9 @@ test('出题：复核发现标错时按复核结果改正，对不上的句子�
     { i: 2, main: 'explained', sub: ['was broken'], changed: true, note: '' },
   ] });
   try {
-    const ids = await ai.generate({ source: 'extra', n: 1, levels: ['CET-4'] });
+    const ids = await ai.generate(await repo.getAccount('owner'), { source: 'extra', n: 1, levels: ['CET-4'] });
     assert.equal(ids.length, 1);
-    const s = await repo.getSentence(ids[0]);
+    const s = await repo.getSentence('owner', ids[0]);
     assert.equal(s.segs[1].t, 'that the study, conducted by team 1 last week, ^had failed^ because of a simple error in measuring the room temperature.');
   } finally {
     delete llmServer.handlers.review;
@@ -433,7 +433,7 @@ test('做题时修正：按单词位置改谓语，或让 AI 复查这一句', a
   assert.equal((await app.api('PUT', '/api/sentences/fix-1/predicates', { spans: [{ kind: 'sub', a: 9, b: 10 }] })).status, 400, '没有主句谓语');
   assert.equal((await app.api('PUT', '/api/sentences/fix-1/predicates', { spans: [{ kind: 'main', a: 1, b: 3 }] })).status, 400, '跨片段');
 
-  await repo.updateSegs('fix-1', s.segs);
+  await repo.updateSegs('owner', 'fix-1', s.segs);
   llmServer.handlers.review = () => ({ items: [{ i: 1, main: 'explained', sub: ['had failed'], changed: true, note: 'that 是连接词' }] });
   try {
     r = await app.api('POST', '/api/sentences/fix-1/review');

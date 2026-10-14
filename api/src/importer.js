@@ -1,4 +1,4 @@
-// 导入从旧版拆解台页面导出的数据：句子 + 练习记录（含批改历史）。可重复运行，不会重复写入。
+// 导入从旧版拆解台页面导出的数据：句子 + 练习记录（含批改历史），都归到你自己的账户（owner）。可重复运行，不会重复写入。
 import * as repo from './repo.js';
 import { checkSentence } from './validate.js';
 
@@ -33,7 +33,7 @@ export async function importExport(data, log = () => {}) {
   for (const r of Array.isArray(data?.records) ? data.records : []) {
     const sid = String(r?.sid || r?.sentenceId || '').trim();
     if (!sid) continue;
-    if (!known.has(sid) && !(await repo.getSentence(sid))) {
+    if (!known.has(sid) && !(await repo.getSentence('owner', sid))) {
       log(`跳过记录 ${sid}：句子不存在`);
       continue;
     }
