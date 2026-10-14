@@ -19,7 +19,7 @@ export const ROLE_CLS = {
 export const DEFK = { main: 'main', attr: 'attr_r', noun: 'noun_obj', adv: 'adv_phrase', nonfin: 'nf_inf' };
 
 export const KB = {
-  main: { t: '句子主干', how: '去掉从句、非谓语和介词短语后，剩下的“主语 + 谓语 + 宾语/表语”。主句谓语不在任何引导词后面。', tr: '先译主干把句意定下来，再把修饰成分一层层挂回去；主干太长时可以先断句。', ex: 'The researchers found that… → 研究人员发现……' },
+  main: { t: '句子主干', how: '主句的“主语 + 谓语 + 宾语/表语”，去掉定语、状语和非谓语短语。主语、宾语或表语本身是从句时，要带上这个从句的引导词和它的主干。主句谓语不在任何引导词后面。', tr: '先译主干把句意定下来，再把修饰成分一层层挂回去；主干太长时可以先断句。', ex: 'The researchers found that… → 研究人员发现……' },
   it_formal: { t: '形式主语 / 形式宾语 it', how: 'It is + 形容词/过去分词 + that/to do；find / make / think + it + 形容词 + to do。it 本身没有意思，真正的主语或宾语在后面。', tr: 'it 不译成“它”。It is said/believed/reported that… 固定译成“据说 / 人们认为 / 据报道……”；find it hard to do 译成“发现很难……”。', ex: 'It is widely believed that… → 人们普遍认为……' },
   notbut: { t: '对比结构 not A but B', how: 'not…but…、not only…but also…、rather than、instead of 连接两个并列成分，重点落在 but 后面。', tr: '译成“不是 A，而是 B”“不仅……而且……”，两边保持结构对称。', ex: 'not the size but the speed → 不是规模，而是速度' },
   comparison: { t: '比较结构', how: 'more/less/-er … than、as … as、the more…the more…。than 后的比较对象常被省略，或用 those / that 代替。', tr: '译成“比……更……”，把省略的比较对象补全；those who… 补成“……的人”。', ex: 'more likely … than those who… → 比……的人更容易……' },

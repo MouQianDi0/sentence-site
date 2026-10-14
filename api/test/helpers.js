@@ -77,7 +77,7 @@ export function startFakeLlm(handlers) {
       const data = JSON.parse(body);
       const prompt = data.messages.at(-1).content;
       calls.push({ path: req.url, auth: req.headers.authorization, data, prompt });
-      const kind = prompt.includes('<student_translation>') ? 'grade' : prompt.includes('解释英文单词') ? 'lookup' : prompt.includes('连接测试') ? 'ping' : prompt.includes('核对下面句子') ? 'review' : 'generate';
+      const kind = prompt.includes('<student_translation>') ? 'grade' : prompt.includes('解释英文单词') ? 'lookup' : prompt.includes('连接测试') ? 'ping' : prompt.includes('逐句核对句子里') ? 'review' : 'generate';
       if (kind === 'ping' && !handlers.ping) handlers.ping = () => ({ ok: true });
       // 没指定时，复核一律回复“没有意见”，句子保持原样
       if (kind === 'review' && !handlers.review) handlers.review = () => ({ items: [] });

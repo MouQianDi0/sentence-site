@@ -90,6 +90,14 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 
 也可以继续用 `.env` 配置（写法见 `.env.example`），改完执行 `sudo docker compose up -d --force-recreate api`。注意：网页保存的密钥用 `COOKIE_SECRET` 加密，改了 `COOKIE_SECRET` 之后要在设置页重新填一次密钥。
 
+## 出题规范（给 AI 和 agent 读的统一标准）
+
+句子数据的所有规则写在一份文件里：[`api/skills/sentence-spec/SKILL.md`](api/skills/sentence-spec/SKILL.md)（Agent Skills 格式）。谓语怎么标、片段怎么切、知识点键怎么选、主干怎么写都以它为准：
+
+- 网站里的 AI：后端每次出题、复核谓语时，把文件里 `<!-- prompt:名字 -->` 标出的几段原样放进提示词。改了规则，更新部署后 AI 就按新规则出题，不用改代码。
+- 校验代码（`api/src/validate.js`、`api/src/predicates.js`）和页面知识点（`web/js/kb.js`）要和它保持一致，`npm test` 会核对知识点键和文件里的完整示例。
+- 写代码的 agent：仓库根目录的 `.claude/skills/sentence-spec` 指向同一份文件，Claude Code 这类支持 Agent Skills 的工具改网站时会读到它；`AGENTS.md` 也指向这里。
+
 ## 接口
 
 | 方法 | 路径 | 说明 |
@@ -100,6 +108,8 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 | POST | /api/sentences/generate | `{"kind":"daily"}` 生成或补齐今日任务；`{"kind":"extra","count":3}` 加练 1–10 句 |
 | GET / PUT | /api/settings/practice | 每日任务设置：`levels`（CET-4 / CET-6，可多选）、`dailyCount`（1–10） |
 | DELETE | /api/sentences/:id | 删除一句（连带它的记录） |
+| PUT | /api/sentences/:id/predicates | 修正谓语标注：`{"spans":[{"kind":"main","a":2,"b":2},{"kind":"sub","a":9,"b":10}]}`，a、b 是整句单词下标 |
+| POST | /api/sentences/:id/review | 让 AI 按出题规范复查这一句的谓语，标错了就改正并保存 |
 | GET | /api/records | 所有句子的练习状态 |
 | PUT | /api/records/:sentenceId | 保存圈谓语结果、选项、草稿（只改传入的字段） |
 | GET | /api/attempts?sentenceId= | AI 批改历史 |

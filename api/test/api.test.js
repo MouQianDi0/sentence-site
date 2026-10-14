@@ -328,7 +328,7 @@ test('加练：四六级混合，超过 5 句分两次请求，句子打乱顺�
   assert.equal(r.status, 200, JSON.stringify(r.body));
   assert.equal(r.body.added.length, 7);
   const calls = llmServer.calls.slice(before).map((c) => c.prompt);
-  const prompts = calls.filter((p) => !p.includes('核对下面句子'));
+  const prompts = calls.filter((p) => !p.includes('逐句核对句子里'));
   assert.equal(prompts.length, 2);
   assert.equal(calls.length - prompts.length, 2, '每批出题后各复核一次');
   assert.match(prompts[0], /按顺序出：第 1 句 CET-[46](，第 \d 句 CET-[46]){4}。/);

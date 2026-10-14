@@ -7,6 +7,8 @@ COPY package.json .npmrc ./
 RUN npm install --omit=dev
 
 COPY src ./src
+# 出题规范：后端把里面的规则放进给 AI 的提示词
+COPY skills ./skills
 COPY scripts ./scripts
 # 旧版页面导出的句子和练习记录：第一次启动、数据库里还没有句子时自动导入
 COPY seed ./seed

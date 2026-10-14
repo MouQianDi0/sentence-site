@@ -1,6 +1,7 @@
 // 提示词：沿用 Claude 页面版里已经跑通的写法，改成适配国内模型的 JSON 对象输出。
 import { KB_KEYS, plainText } from './validate.js';
 import { extractMarks } from './predicates.js';
+import { spec } from './spec.js';
 
 export function gradePrompt(sentence, text) {
   return `你是大学英语四六级翻译阅卷老师，请批改学生把英文长难句译成中文的译文。
@@ -30,17 +31,24 @@ export function lookupPrompt(sentence, word) {
 只回复一个 JSON 对象：{"lemma":"原形","ipa":"音标，如 /ˈpʌblɪʃ/","pos":"词性缩写，如 v. n. adj.","zh":"在本句中的中文意思，15字内","more":"其他常见意思，用；分隔，20字内"}`;
 }
 
-const GEN_SPEC = `只回复一个 JSON 对象：{"sentences":[句子1, 句子2, ...]}。每个句子的格式：
-{"level":"CET-4 或 CET-6","focus":"本句考点，10字内","segs":[{"r":"成分","t":"英文片段","n":"中文说明，40字内","k":"知识点键"}],"trunk":"主干英文","trunkZh":"主干中文","trap":"最容易误判的地方，没有就给空字符串","tip":"翻译技巧，60字内","ref":"最佳中文译文","opts":[{"t":"译文","ok":true,"why":"好在哪"},{"t":"译文","ok":false,"why":"错在哪"},{"t":"译文","ok":false,"why":"错在哪"}],"words":[{"w":"句中原词","lemma":"原形","pos":"词性如 v. n. adj.","zh":"本句中的意思"}],"phrases":[{"m":"句中连续出现的原文","p":"词典形式","zh":"中文"}]}
+// 字段格式之外的规则都来自出题规范 skills/sentence-spec/SKILL.md
+const GEN_SPEC = () => `只回复一个 JSON 对象：{"sentences":[句子1, 句子2, ...]}。每个句子的格式：
+{"level":"CET-4 或 CET-6","focus":"本句考点","segs":[{"r":"成分","t":"英文片段","n":"中文说明","k":"知识点键"}],"trunk":"主干英文","trunkZh":"主干中文","trap":"最容易误判的地方","tip":"翻译技巧","ref":"最佳中文译文","opts":[{"t":"译文","ok":true,"why":"好在哪"},{"t":"译文","ok":false,"why":"错在哪"},{"t":"译文","ok":false,"why":"错在哪"}],"words":[{"w":"句中原词","lemma":"原形","pos":"词性如 v. n. adj.","zh":"本句中的意思"}],"phrases":[{"m":"句中连续出现的原文","p":"词典形式","zh":"中文"}]}
 
-segs 规则（非常重要）：
-1. 按原句顺序把整句切成连续片段；所有片段的 t 去掉标记后用空格连起来，必须正好等于原句（含标点）。每个从句的引导词放在该从句片段的开头。
-2. 主句谓语（含助动词、情态动词、否定词，如 has been criticized、cannot provide）用 *…* 包起来，整句只标这一处；每个从句的谓语用 ^…^ 包起来。引导词（that、which、who、when、whether 等）不是谓语，不要标；不定式、动名词、作定语或状语的分词（如 the experiment conducted last week 里的 conducted）都不是谓语，不要标。trap 里说“不是谓语”的词，绝不能再标成谓语。标记后的标点放在标记外，如 ^cannot provide^,
-3. r 只能是 main（主句的主语、谓语、宾语、表语及主句内的短语）、attr（定语从句）、noun（名词性从句）、adv（状语从句或状语短语）、nonfin（非谓语短语）。
-4. k 只能取：${KB_KEYS.join(', ')}。
-示例片段：[{"r":"main","t":"The new policy,","n":"主语。","k":"main"},{"r":"nonfin","t":"designed to reduce traffic,","n":"过去分词短语作后置定语，修饰 policy。","k":"nf_pp"},{"r":"main","t":"*has been criticized*","n":"主句谓语，现在完成时的被动语态。","k":"main"}]
-opts：恰好 3 个，ok 为 true 的那个与 ref 一致；另外两个分别示范“逐词硬译 / 翻译腔”和“理解错结构或漏译”的典型错误，why 40字内。
-words 给 4-6 个较难的词；phrases 给 2-3 个固定搭配，m 必须是句中连续出现的原文。`;
+下面是出题规范，每一条都要遵守：
+
+${spec('predicates')}
+
+${spec('segments')}
+
+${spec('kb')}
+k 只能取：${KB_KEYS.join(', ')}。
+
+${spec('trunk')}
+
+${spec('fields')}
+
+${spec('example')}`;
 
 const LEVEL_SPEC = {
   'CET-4': 'CET-4：20-32 个词，包含 2 种结构，词汇以四级大纲为主，话题贴近校园和日常社会生活。',
@@ -65,7 +73,7 @@ ${levels.map((l) => `- ${LEVEL_SPEC[l]}`).join('\n')}
 - 不要和这些已有句子重复：
 ${list}
 
-${GEN_SPEC}`;
+${GEN_SPEC()}`;
 }
 
 /** 复核谓语标注。items：[{segs, trap}]；回复里 i 从 1 开始 */
@@ -78,10 +86,9 @@ export function reviewPrompt(items) {
       return `${i + 1}. ${plainText(s.segs)}\n   当前标注：主句谓语 ${main}；从句谓语 ${sub}`;
     })
     .join('\n');
-  return `你是英语语法老师，请逐句核对下面句子里“谓语动词”的标注是否正确，标错的给出正确答案。
-谓语：有时态、和主语搭配的限定动词，连同它的助动词、情态动词、否定词算一个整体，如 has been criticized、cannot provide、did not know。
-不是谓语：引导词（that、which、who、when、whether 等）；不定式 to do；动名词和现在分词 doing；前面没有 be / have 的过去分词（如 the experiment conducted last week 里的 conducted）；形容词。
-每个主句、每个从句各有一个谓语。主句谓语只有一个。
+  return `你是英语语法老师，请按下面的规范逐句核对句子里“谓语动词”的标注是否正确，标错的给出正确答案。
+
+${spec('predicates')}
 
 ${list}
 

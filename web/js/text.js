@@ -44,6 +44,43 @@ export function flat(s) {
   return out;
 }
 
+/**
+ * 主干在原句里的位置：把 trunk 的单词按顺序对到整句单词上（只能删词，不能改词），
+ * 有多种对法时选连成段数最少的。返回整句单词下标的 Set；对不上返回 null。
+ */
+export function trunkWords(s, fw = flat(s)) {
+  const norm = (w) => w.toLowerCase().replace(/’/g, "'").replace(/^[^a-z0-9']+|[^a-z0-9']+$/g, '');
+  const T = String(s.trunk || '').split(/\s+/).map(norm).filter(Boolean);
+  const W = fw.map((x) => x.norm);
+  const n = W.length;
+  const m = T.length;
+  if (!m || m > n) return null;
+  const INF = 1e9;
+  // cost[j][i]：trunk 第 j 个词对到原句第 i 个词时，最少连成几段；from 记住上一个词对到哪里
+  const cost = T.map(() => new Array(n).fill(INF));
+  const from = T.map(() => new Array(n).fill(-1));
+  for (let i = 0; i < n; i++) if (W[i] === T[0]) cost[0][i] = 1;
+  for (let j = 1; j < m; j++) {
+    for (let i = j; i < n; i++) {
+      if (W[i] !== T[j]) continue;
+      for (let k = j - 1; k < i; k++) {
+        if (cost[j - 1][k] >= INF) continue;
+        const c = cost[j - 1][k] + (k === i - 1 ? 0 : 1);
+        if (c < cost[j][i]) {
+          cost[j][i] = c;
+          from[j][i] = k;
+        }
+      }
+    }
+  }
+  let end = -1;
+  for (let i = 0; i < n; i++) if (cost[m - 1][i] < INF && (end < 0 || cost[m - 1][i] < cost[m - 1][end])) end = i;
+  if (end < 0) return null;
+  const out = new Set();
+  for (let j = m - 1, i = end; j >= 0; i = from[j][i], j--) out.add(i);
+  return out;
+}
+
 /** 每个单词属于第几个固定搭配（没有就是 null） */
 export function phraseMap(s, fw) {
   const map = new Array(fw.length).fill(null);

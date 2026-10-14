@@ -1,7 +1,7 @@
 // 长难句拆解台 · 页面逻辑
 import { api, setUnauthorizedHandler } from './api.js';
 import { ROLES, ROLE_CLS, KB, DEFK } from './kb.js';
-import { esc, toks, plain, flat, phraseMap, diff, fmtDay, fmtTime, scoreTone, shuffle } from './text.js';
+import { esc, toks, plain, flat, phraseMap, trunkWords, diff, fmtDay, fmtTime, scoreTone, shuffle } from './text.js';
 import * as speech from './speech.js';
 import * as A from './anim.js';
 import { createSettingsView } from './settings.js';
@@ -280,6 +280,8 @@ function renderSentence() {
       .join(' ');
   } else {
     hint.textContent = '点彩色片段，看它是什么成分、修饰谁。';
+    // 只看主干：按主干句里的词点亮（宾语从句这类主干缺不了的从句骨架也会保留）；主干对不上原句时退回按成分颜色
+    const tw = mainOnly ? trunkWords(cur) : null;
     let wi = 0;
     el.innerHTML = cur.segs
       .map((g, si) => {
@@ -289,13 +291,24 @@ function renderSentence() {
         wi += n;
         const rc = ROLE_CLS[g.r] || ROLE_CLS.main;
         let c = `cursor-pointer rounded-[3px] px-0.5 -mx-0.5 py-0.5 box-decoration-clone bg-[linear-gradient(var(--hl),var(--hl))] bg-no-repeat border-b-[2.5px] transition-opacity duration-200 data-[reading]:outline-2 data-[reading]:outline-read ${rc.hl}`;
-        c += roleOn[g.r] ? ` ${rc.border}` : ' border-transparent';
-        if (mainOnly && g.r !== 'main') c += ' opacity-20';
+        const colored = roleOn[g.r] && !(tw && g.r !== 'main');
+        c += colored ? ` ${rc.border}` : ' border-transparent';
+        if (mainOnly && !tw && g.r !== 'main') c += ' opacity-20';
         if (segPick === si) c += ' outline-2 outline-offset-1 outline-ink';
+        let k = a;
+        const word = (w) => {
+          const on = !tw || tw.has(k);
+          k++;
+          return on ? esc(w) : `<span class="opacity-20">${esc(w)}</span>`;
+        };
         const inner = tk
-          .map((x) => (x.k === 'main' ? `<span class="fake-bold underline decoration-2 underline-offset-4">${esc(x.t)}</span>${esc(x.p)}` : x.k === 'sub' ? `<span class="fake-bold">${esc(x.t)}</span>${esc(x.p)}` : esc(x.t)))
+          .map((x) => {
+            const ws = x.t.split(/\s+/).map(word).join(' ');
+            if (x.k === 'main') return `<span class="fake-bold underline decoration-2 underline-offset-4">${ws}</span>${esc(x.p)}`;
+            return x.k === 'sub' ? `<span class="fake-bold">${ws}</span>${esc(x.p)}` : ws;
+          })
           .join(' ');
-        return `<span class="${c}" style="background-size:${roleOn[g.r] ? '100%' : '0%'} 100%" data-seg="${si}" data-a="${a}" data-b="${wi - 1}" tabindex="0" role="button">${inner}</span>`;
+        return `<span class="${c}" style="background-size:${colored ? '100%' : '0%'} 100%" data-seg="${si}" data-a="${a}" data-b="${wi - 1}" tabindex="0" role="button">${inner}</span>`;
       })
       .join(' ');
     if (sweepPending) {
