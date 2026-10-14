@@ -226,6 +226,7 @@ function groupHTML(fw, g, inner, open, close = '</span>') {
 }
 
 function renderSentence() {
+  A.clearPops();
   const el = $('sentence');
   const hint = $('hint');
   if (!cur) {
@@ -1382,6 +1383,7 @@ $('sentence').addEventListener('click', (e) => {
     picked.has(i) ? picked.delete(i) : picked.add(i);
     renderSentence();
     renderPanel(false);
+    if (picked.has(i)) A.popText($('sentence').querySelector(`[data-t="${i}"]`));
     return;
   }
   const g = e.target.closest('[data-seg]');
@@ -1487,6 +1489,7 @@ $('panel').addEventListener('click', (e) => {
         renderSentence();
         renderPanel(true);
       });
+      A.popTextEach($('sentence').querySelectorAll('[data-t]'));
       return;
     }
     case 'clear':

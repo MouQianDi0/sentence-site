@@ -29,6 +29,75 @@ export function popEach(els) {
   list(els).forEach((el, i) => pop(el, (i % 24) * 0.05));
 }
 
+/**
+ * 句子里单词的弹跳：单词是可以跨行断开的行内 span，transform 对它不起作用，直接改尺寸又会让排版跳动。
+ * 所以复制一份盖在原位置上弹跳，原来的单词先隐藏、动画结束再显示，排版一点不动。
+ * 跨行断开的词块没法整体复制，就淡入一下。
+ */
+const ghosts = new Set();
+
+/** 句子重新渲染前调用：收掉还在播的复制品，免得盖在新内容上 */
+export function clearPops() {
+  ghosts.forEach((g) => {
+    gsap.killTweensOf(g);
+    g.remove();
+  });
+  ghosts.clear();
+}
+
+export function popText(el, delay = 0) {
+  if (!on || !el) return;
+  const rects = el.getClientRects();
+  if (rects.length !== 1) {
+    gsap.fromTo(el, { opacity: 0.35 }, { opacity: 1, duration: 0.45, delay, ease: 'power2.out', clearProps: 'opacity' });
+    return;
+  }
+  const r = rects[0];
+  const cs = getComputedStyle(el);
+  const ghost = el.cloneNode(true);
+  [ghost, ...ghost.querySelectorAll('*')].forEach((n) => [...n.attributes].forEach((a) => a.name !== 'class' && n.removeAttribute(a.name)));
+  ghost.setAttribute('aria-hidden', 'true');
+  // 先设 font（简写会重置行高），再设行高
+  ghost.style.font = cs.font;
+  Object.assign(ghost.style, {
+    position: 'fixed',
+    left: `${r.left}px`,
+    top: `${r.top}px`,
+    width: `${r.width}px`,
+    height: `${r.height}px`,
+    margin: '0',
+    display: 'inline-block',
+    whiteSpace: 'nowrap',
+    lineHeight: `${r.height}px`,
+    color: cs.color,
+    pointerEvents: 'none',
+    zIndex: '60',
+  });
+  document.body.appendChild(ghost);
+  ghosts.add(ghost);
+  el.style.visibility = 'hidden';
+  gsap.fromTo(
+    ghost,
+    { scale: 0.82 },
+    {
+      scale: 1,
+      duration: 0.45,
+      delay,
+      ease: 'back.out(3)',
+      onComplete: () => {
+        el.style.visibility = '';
+        ghost.remove();
+        ghosts.delete(ghost);
+      },
+    },
+  );
+}
+
+export function popTextEach(els) {
+  if (!on) return;
+  list(els).forEach((el, i) => popText(el, (i % 24) * 0.05));
+}
+
 /** 荧光笔逐段刷出颜色 */
 export function sweep(segs) {
   const els = list(segs).filter((el) => el.style.backgroundSize !== '0% 100%');
