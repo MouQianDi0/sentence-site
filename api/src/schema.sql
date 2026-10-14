@@ -95,3 +95,16 @@ END $$;
 UPDATE accounts SET practice = (SELECT value FROM settings WHERE key = 'practice')
   WHERE id = 'owner' AND practice IS NULL AND EXISTS (SELECT 1 FROM settings WHERE key = 'practice');
 DELETE FROM settings WHERE key = 'practice' AND EXISTS (SELECT 1 FROM accounts WHERE id = 'owner' AND practice IS NOT NULL);
+
+-- ---- 设备：每个邀请码最多能在几台设备（浏览器）上登录 -----------------------------------
+-- 设备编号是网站第一次登录时发给这个浏览器的随机串（Cookie ss_device），不是手机硬件编号。
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS device_limit int NOT NULL DEFAULT 2;
+CREATE TABLE IF NOT EXISTS devices (
+  account_id text NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  device_id  text NOT NULL,
+  label      text NOT NULL DEFAULT '',            -- 例如 iPhone · 微信
+  first_seen timestamptz NOT NULL DEFAULT now(),
+  last_seen  timestamptz NOT NULL DEFAULT now(),
+  last_ip    text,
+  PRIMARY KEY (account_id, device_id)
+);

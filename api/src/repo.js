@@ -221,7 +221,7 @@ export async function bumpUsage(accountId, day, field) {
 }
 
 // ---- accounts ----------------------------------------------------------------
-const ACCOUNT_COLS = `id, role, note, code_hash AS "codeHash", code_enc AS "codeEnc", practice,
+const ACCOUNT_COLS = `id, role, note, code_hash AS "codeHash", code_enc AS "codeEnc", practice, device_limit AS "deviceLimit",
   to_json(created_at)#>>'{}' AS "createdAt", to_json(last_seen_at)#>>'{}' AS "lastSeenAt"`;
 
 export async function getAccount(id) {
@@ -285,4 +285,50 @@ export async function setPractice(id, practice) {
 
 export async function touchAccount(id) {
   await query('UPDATE accounts SET last_seen_at = now() WHERE id = $1', [id]);
+}
+
+export async function setDeviceLimit(id, n) {
+  const { rowCount } = await query(`UPDATE accounts SET device_limit = $2 WHERE id = $1 AND role = 'member'`, [id, n]);
+  return rowCount > 0;
+}
+
+// ---- devices（邀请账户登录过的设备）---------------------------------------------
+const DEVICE_COLS = `account_id AS "accountId", device_id AS "id", label, last_ip AS "ip",
+  to_json(first_seen)#>>'{}' AS "firstSeen", to_json(last_seen)#>>'{}' AS "lastSeen"`;
+
+export async function getDevice(accountId, deviceId) {
+  const { rows } = await query(`SELECT ${DEVICE_COLS} FROM devices WHERE account_id = $1 AND device_id = $2`, [accountId, deviceId]);
+  return rows[0] || null;
+}
+
+/** 所有邀请账户的设备，最近用过的在前（管理页用） */
+export async function listMemberDevices() {
+  const { rows } = await query(
+    `SELECT ${DEVICE_COLS} FROM devices
+     WHERE account_id IN (SELECT id FROM accounts WHERE role = 'member')
+     ORDER BY last_seen DESC`,
+  );
+  return rows;
+}
+
+/** 登记一台新设备；这个账户的设备数已经到上限时不登记，返回 false */
+export async function addDevice({ accountId, deviceId, label, ip }) {
+  const { rows } = await query(
+    `INSERT INTO devices (account_id, device_id, label, last_ip)
+     SELECT $1, $2, $3, $4
+     WHERE (SELECT count(*) FROM devices WHERE account_id = $1) < (SELECT device_limit FROM accounts WHERE id = $1)
+     ON CONFLICT DO NOTHING
+     RETURNING device_id`,
+    [accountId, deviceId, label, ip],
+  );
+  return rows.length > 0;
+}
+
+export async function touchDevice(accountId, deviceId, ip) {
+  await query('UPDATE devices SET last_seen = now(), last_ip = $3 WHERE account_id = $1 AND device_id = $2', [accountId, deviceId, ip]);
+}
+
+export async function deleteDevice(accountId, deviceId) {
+  const { rowCount } = await query('DELETE FROM devices WHERE account_id = $1 AND device_id = $2', [accountId, deviceId]);
+  return rowCount > 0;
 }

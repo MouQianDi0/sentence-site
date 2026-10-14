@@ -115,23 +115,45 @@ export function startFakeLlm(handlers) {
   });
 }
 
-export async function startApp(handler) {
+/** opts.ua：模拟的浏览器信息（User-Agent） */
+export async function startApp(handler, { ua = '' } = {}) {
   const server = http.createServer(handler);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
-  let cookie = '';
+  const jar = new Map(); // 像浏览器一样记住多个 Cookie
+  const cookieHeader = () => [...jar].map(([k, v]) => `${k}=${v}`).join('; ');
   const api = async (method, path, body, { auth = true } = {}) => {
     const res = await fetch(base + path, {
       method,
-      headers: { 'Content-Type': 'application/json', ...(auth && cookie ? { Cookie: cookie } : {}) },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(ua ? { 'User-Agent': ua } : {}),
+        ...(auth && jar.size ? { Cookie: cookieHeader() } : {}),
+      },
       body: body === undefined ? undefined : JSON.stringify(body),
     });
-    const setCookie = res.headers.get('set-cookie');
-    if (setCookie && setCookie.startsWith('ss_session=') && !setCookie.startsWith('ss_session=;')) {
-      cookie = setCookie.split(';')[0];
+    for (const c of res.headers.getSetCookie()) {
+      const [pair, ...attrs] = c.split(';');
+      const i = pair.indexOf('=');
+      const name = pair.slice(0, i).trim();
+      const value = pair.slice(i + 1).trim();
+      if (!value || attrs.some((a) => /max-age=0\b/i.test(a.trim()))) jar.delete(name);
+      else jar.set(name, value);
     }
     const text = await res.text();
     return { status: res.status, body: text ? JSON.parse(text) : null, headers: res.headers };
   };
-  return { api, base, close: () => server.close(), setCookie: (c) => (cookie = c) };
+  return {
+    api,
+    base,
+    close: () => server.close(),
+    setCookie: (c) => {
+      jar.clear();
+      const i = c.indexOf('=');
+      if (i > 0) jar.set(c.slice(0, i), c.slice(i + 1));
+    },
+    /** 模拟清除浏览器数据：丢掉所有 Cookie */
+    clearCookies: () => jar.clear(),
+    cookies: () => Object.fromEntries(jar),
+  };
 }

@@ -54,6 +54,8 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 
 - 每个邀请码对应一个独立账户：句库、练习记录、批改历史、每日任务设置和模型配置都和你的分开，互相看不到。
 - 邀请账户用 AI（批改、查词、出题）时，用的是它自己在“设置”里填的模型和 API 密钥，不会用到你的；没填之前只能做已有的题。每天的批改、查词、加练次数上限和你一样（`.env` 里的 `DAILY_*_LIMIT`），各自单独计数。
+- 每个邀请码最多能在 2 台设备（浏览器）上登录，管理页里可以按邀请码调成 1–10 台。超出的新设备登录时会被拒绝，提示找你移除旧设备。管理页能看到每台设备大概是什么（如“iPhone · 微信”）、最近使用时间和 IP；移除一台设备会让它马上退出、空出名额。
+- 设备是按浏览器认的：网站第一次登录时给浏览器发一个随机编号（Cookie `ss_device`），读不到手机的硬件编号。同一个浏览器退出再登录不会多占名额；对方清除浏览器数据、换浏览器或用无痕模式，都算一台新设备。
 - 只有你能生成、查看、删除邀请码；邀请账户的设置页里没有这一块。删除邀请码会立刻让对方退出，并删除这个账户和它的全部数据，不能恢复。
 - 每天 7:50 的自动出题会照顾你自己和最近 7 天登录过、配好了模型的邀请账户；很久没来的账户回来后在练习页点一下就能生成。
 - 设置页最下面有“退出登录”，可以换一个账户登录。
@@ -118,7 +120,9 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 | POST | /api/lock | 退出登录 |
 | GET | /api/session | 是否已登录、是哪种账户（`role`：owner 是你自己，member 是邀请账户；`name`：备注名） |
 | GET / POST | /api/admin/invites | 只有你自己能用：列出邀请码（含邀请码原文、创建时间、最近使用）；`{"note":"小王"}` 生成一个 |
+| PUT | /api/admin/invites/:id | 只有你自己能用：`{"deviceLimit":3}` 改这个邀请码最多能在几台设备上登录（1–10） |
 | DELETE | /api/admin/invites/:id | 只有你自己能用：删除邀请码，连带删除这个账户和它的全部数据 |
+| DELETE | /api/admin/invites/:id/devices/:deviceId | 只有你自己能用：移除一台设备，它马上退出登录 |
 | GET | /api/sentences?since= | 句库（带 since 只返回更新的） |
 | POST | /api/sentences/generate | `{"kind":"daily"}` 生成或补齐今日任务；`{"kind":"extra","count":3}` 加练 1–10 句 |
 | GET / PUT | /api/settings/practice | 每日任务设置：`levels`（CET-4 / CET-6，可多选）、`dailyCount`（1–10） |

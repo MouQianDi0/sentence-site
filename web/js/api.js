@@ -37,6 +37,8 @@ export const api = {
   invites: () => request('GET', '/api/admin/invites'),
   createInvite: (note) => request('POST', '/api/admin/invites', { note }),
   deleteInvite: (id) => request('DELETE', `/api/admin/invites/${encodeURIComponent(id)}`),
+  setDeviceLimit: (id, deviceLimit) => request('PUT', `/api/admin/invites/${encodeURIComponent(id)}`, { deviceLimit }),
+  removeDevice: (id, deviceId) => request('DELETE', `/api/admin/invites/${encodeURIComponent(id)}/devices/${encodeURIComponent(deviceId)}`),
   sentences: (since) => request('GET', `/api/sentences${since ? `?since=${encodeURIComponent(since)}` : ''}`),
   deleteSentence: (id) => request('DELETE', `/api/sentences/${encodeURIComponent(id)}`),
   // 谓语标错了：spans 按整句单词下标 [{kind:'main'|'sub', a, b}]；或者让 AI 复查这一句

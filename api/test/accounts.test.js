@@ -229,3 +229,63 @@ test('删除邀请码：账户立刻登不上，它的句子、记录、批改�
     m.close();
   }
 });
+
+test('每个邀请码默认最多 2 台设备；同一个浏览器重复登录不多占名额；移除设备会让它马上退出', async () => {
+  const inv = (await owner.api('POST', '/api/admin/invites', { note: '设备' })).body.invite;
+  assert.equal(inv.deviceLimit, 2);
+  assert.deepEqual(inv.devices, []);
+  const IPHONE_WX = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 MicroMessenger/8.0.47';
+  const WIN_EDGE = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36 Edg/120.0';
+  const a = await startApp(handler, { ua: IPHONE_WX });
+  const b = await startApp(handler, { ua: WIN_EDGE });
+  const c = await client();
+  const devicesOf = async () => (await owner.api('GET', '/api/admin/invites')).body.invites.find((x) => x.id === inv.id).devices;
+  try {
+    assert.equal((await a.api('POST', '/api/unlock', { password: inv.code })).status, 200);
+    assert.ok(a.cookies().ss_device, '发了设备编号');
+    let devs = await devicesOf();
+    assert.equal(devs.length, 1);
+    assert.equal(devs[0].label, 'iPhone · 微信');
+    assert.ok(devs[0].ip && devs[0].firstSeen && devs[0].lastSeen);
+
+    // 同一个浏览器退出再登录：还是那台设备
+    await a.api('POST', '/api/lock');
+    assert.equal((await a.api('GET', '/api/sentences')).status, 401);
+    assert.equal((await a.api('POST', '/api/unlock', { password: inv.code })).status, 200);
+    assert.equal((await devicesOf()).length, 1);
+
+    // 第二台可以，第三台被拒绝（不算输错密码）
+    assert.equal((await b.api('POST', '/api/unlock', { password: inv.code })).status, 200);
+    const third = await c.api('POST', '/api/unlock', { password: inv.code });
+    assert.equal(third.status, 403);
+    assert.match(third.body.error, /已经在 2 台设备上登录过了/);
+    assert.equal((await c.api('GET', '/api/sentences')).status, 401);
+    assert.equal((await b.api('GET', '/api/sentences')).status, 200);
+
+    // 移除 iPhone：它马上退出，空出的名额给第三台
+    const phone = (await devicesOf()).find((d) => d.label === 'iPhone · 微信');
+    const rm = await owner.api('DELETE', `/api/admin/invites/${inv.id}/devices/${phone.id}`);
+    assert.equal(rm.status, 200, JSON.stringify(rm.body));
+    assert.equal(rm.body.invite.devices.length, 1);
+    assert.equal((await a.api('GET', '/api/sentences')).status, 401, '被移除的设备马上退出');
+    assert.equal((await c.api('POST', '/api/unlock', { password: inv.code })).status, 200);
+    assert.equal((await owner.api('DELETE', `/api/admin/invites/${inv.id}/devices/${phone.id}`)).status, 404);
+
+    // 调大上限后，被移除的设备可以重新登录；清除浏览器数据算新设备
+    const up = await owner.api('PUT', `/api/admin/invites/${inv.id}`, { deviceLimit: 3 });
+    assert.equal(up.status, 200, JSON.stringify(up.body));
+    assert.equal(up.body.invite.deviceLimit, 3);
+    assert.equal((await a.api('POST', '/api/unlock', { password: inv.code })).status, 200);
+    b.clearCookies();
+    assert.equal((await b.api('POST', '/api/unlock', { password: inv.code })).status, 403, '清了浏览器数据就是新设备');
+    for (const bad of [0, 11, 1.5, 'x']) {
+      assert.equal((await owner.api('PUT', `/api/admin/invites/${inv.id}`, { deviceLimit: bad })).status, 400, String(bad));
+    }
+    assert.equal((await c.api('PUT', `/api/admin/invites/${inv.id}`, { deviceLimit: 9 })).status, 403, '邀请账户不能改');
+    assert.equal((await owner.api('PUT', '/api/admin/invites/nope', { deviceLimit: 2 })).status, 404);
+  } finally {
+    a.close();
+    b.close();
+    c.close();
+  }
+});

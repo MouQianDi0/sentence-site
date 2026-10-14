@@ -8,7 +8,7 @@
 
 ## 账户
 
-数据按账户隔离：`sentences.account_id` 指向 `accounts`，记录、批改、查词缓存跟着句子走，`ai_usage` 也带 `account_id`。`api/src/repo.js` 里查句子的函数第一个参数都是 `accountId`，新写的查询也要带上，不能让一个账户读到别的账户的数据。你自己是 `owner`（访问密码登录），邀请账户是 `member`（邀请码登录）；只有 owner 能用 `/api/admin/*`。模型配置按账户（`createSettingsHub`），邀请账户只用它自己填的 API 密钥，不能退回 `.env`。
+数据按账户隔离：`sentences.account_id` 指向 `accounts`，记录、批改、查词缓存跟着句子走，`ai_usage` 也带 `account_id`。`api/src/repo.js` 里查句子的函数第一个参数都是 `accountId`，新写的查询也要带上，不能让一个账户读到别的账户的数据。你自己是 `owner`（访问密码登录），邀请账户是 `member`（邀请码登录）；只有 owner 能用 `/api/admin/*`。邀请账户的登录 Cookie 里带设备编号，每次请求都核对 `devices` 表，设备被移除就失效。模型配置按账户（`createSettingsHub`），邀请账户只用它自己填的 API 密钥，不能退回 `.env`。
 
 ## 改完要做
 

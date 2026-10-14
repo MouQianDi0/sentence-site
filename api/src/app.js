@@ -1,6 +1,6 @@
 // 路由和请求处理。createApp() 返回一个 (req, res) 处理函数，测试里也直接用它。
 import * as repo from './repo.js';
-import { createAuth, COOKIE_NAME } from './auth.js';
+import { createAuth, COOKIE_NAME, DEVICE_COOKIE } from './auth.js';
 import { createRouter } from './router.js';
 import { HttpError, send, readJson, parseCookies, clientIp, isHttps } from './http.js';
 import { checkRecordPatch } from './validate.js';
@@ -8,7 +8,7 @@ import { createAi, toHttpError } from './ai.js';
 import { createLlm, LlmError } from './llm.js';
 import { createSettings, createSettingsHub } from './settings.js';
 import { createPractice, MAX_DAILY } from './practice.js';
-import { createAccounts, memberVersion } from './accounts.js';
+import { createAccounts, memberVersion, newDeviceId, isDeviceId } from './accounts.js';
 import { shanghaiDate } from './time.js';
 
 /** 连接测试没拿到 JSON 时，告诉用户该怎么改 */
@@ -38,7 +38,7 @@ export function createApp(cfg, { llm = createLlm(cfg), settings = null, practice
   const ai = aiIn || createAi({ cfg, llm, llmFor: hub.llmFor, log });
   const practiceSvc = practice || createPractice(cfg);
   const settingsReady = settings ? Promise.resolve() : settingsSvc.load().catch((e) => log.error('[settings]', e.message));
-  const sessionOf = (req) => accounts.resolve(auth.verify(parseCookies(req.headers.cookie)[COOKIE_NAME]), auth.ownerVersion);
+  const sessionOf = (req) => accounts.resolve(auth.verify(parseCookies(req.headers.cookie)[COOKIE_NAME]), auth.ownerVersion, clientIp(req));
 
   // ---- 不需要密码 -------------------------------------------------------------
   router.add('GET', '/api/health', async () => {
@@ -65,9 +65,21 @@ export function createApp(cfg, { llm = createLlm(cfg), settings = null, practice
     if (r.locked) throw new HttpError(429, `输错次数太多，请 ${r.locked} 分钟后再试`);
     if (!r.ok) throw new HttpError(401, `密码或邀请码不对，还可以再试 ${r.left} 次`);
     const secure = cfg.cookieSecure || isHttps(req);
-    const token = r.account === 'owner' ? auth.issue() : auth.issue(r.account.id, memberVersion(r.account));
-    const acc = r.account === 'owner' ? { role: 'owner' } : r.account;
-    return { body: { ok: true, ...me(acc) }, headers: { 'Set-Cookie': auth.cookie(token, secure) } };
+    if (r.account === 'owner') {
+      return { body: { ok: true, ...me({ role: 'owner' }) }, headers: { 'Set-Cookie': auth.cookie(auth.issue(), secure) } };
+    }
+    // 邀请账户：认这个浏览器的设备编号，新设备要占一个名额
+    const acc = r.account;
+    const had = parseCookies(req.headers.cookie)[DEVICE_COOKIE];
+    const device = isDeviceId(had) ? had : newDeviceId();
+    if (!(await accounts.useDevice(acc, device, { ua: req.headers['user-agent'], ip: clientIp(req) }))) {
+      throw new HttpError(403, `这个邀请码已经在 ${acc.deviceLimit} 台设备上登录过了，请联系管理员移除不用的设备`);
+    }
+    const token = auth.issue(acc.id, memberVersion(acc), device);
+    return {
+      body: { ok: true, ...me(acc) },
+      headers: { 'Set-Cookie': [auth.cookie(token, secure), auth.deviceCookie(device, secure)] },
+    };
   }, pub);
 
   router.add('POST', '/api/lock', async () => ({
@@ -158,6 +170,14 @@ export function createApp(cfg, { llm = createLlm(cfg), settings = null, practice
   router.add('GET', '/api/admin/invites', async () => ({ body: { invites: await accounts.list() } }), ownerOnly);
   // {note}：备注名
   router.add('POST', '/api/admin/invites', async ({ req }) => ({ body: { invite: await accounts.create(await readJson(req)) } }), ownerOnly);
+  // {deviceLimit}：这个邀请码最多能在几台设备上登录（1–10）
+  router.add('PUT', '/api/admin/invites/:id', async ({ req, params }) => ({
+    body: { invite: await accounts.setDeviceLimit(params.id, (await readJson(req)).deviceLimit) },
+  }), ownerOnly);
+  // 移除一台设备：它马上退出登录，空出名额
+  router.add('DELETE', '/api/admin/invites/:id/devices/:deviceId', async ({ params }) => ({
+    body: { invite: await accounts.removeDevice(params.id, params.deviceId) },
+  }), ownerOnly);
   // 删除邀请码 = 删除这个账户和它的全部数据（包括它自己填的模型配置）
   router.add('DELETE', '/api/admin/invites/:id', async ({ params }) => {
     await accounts.remove(params.id);

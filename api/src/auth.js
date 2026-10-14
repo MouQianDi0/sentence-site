@@ -3,6 +3,7 @@
 import crypto from 'node:crypto';
 
 export const COOKIE_NAME = 'ss_session';
+export const DEVICE_COOKIE = 'ss_device';
 const DAY = 24 * 60 * 60 * 1000;
 const MAX_AGE = 30 * DAY;
 const MAX_FAILS = 5;
@@ -18,13 +19,15 @@ export function createAuth({ accessPassword, cookieSecret, now = () => Date.now(
   const sign = (payload) =>
     crypto.createHmac('sha256', cookieSecret).update(payload).digest('base64url');
 
-  /** accountId 不传时是 owner */
-  function issue(accountId = 'owner', version = pwVersion) {
-    const payload = Buffer.from(JSON.stringify({ a: accountId, v: version, exp: now() + MAX_AGE })).toString('base64url');
+  /** accountId 不传时是 owner；邀请账户还带上设备编号 device（移除设备后这个 Cookie 就失效） */
+  function issue(accountId = 'owner', version = pwVersion, device = undefined) {
+    const data = { a: accountId, v: version, exp: now() + MAX_AGE };
+    if (device) data.d = device;
+    const payload = Buffer.from(JSON.stringify(data)).toString('base64url');
     return `${payload}.${sign(payload)}`;
   }
 
-  /** 签名和有效期对得上时返回 {a, v}（账户 id 和版本号），由调用方再去核对账户；否则返回 null */
+  /** 签名和有效期对得上时返回 {a, v, d}（账户 id、版本号、设备编号），由调用方再去核对账户；否则返回 null */
   function verify(token) {
     if (typeof token !== 'string') return null;
     const [payload, sig] = token.split('.');
@@ -36,7 +39,7 @@ export function createAuth({ accessPassword, cookieSecret, now = () => Date.now(
       const data = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8'));
       if (typeof data.exp !== 'number' || data.exp <= now()) return null;
       // 旧版 Cookie 没有账户 id，都是 owner 的
-      return { a: typeof data.a === 'string' ? data.a : 'owner', v: data.v };
+      return { a: typeof data.a === 'string' ? data.a : 'owner', v: data.v, d: data.d };
     } catch {
       return null;
     }
@@ -44,6 +47,13 @@ export function createAuth({ accessPassword, cookieSecret, now = () => Date.now(
 
   function cookie(token, secure) {
     const parts = [`${COOKIE_NAME}=${token}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${MAX_AGE / 1000}`];
+    if (secure) parts.push('Secure');
+    return parts.join('; ');
+  }
+
+  /** 设备编号 Cookie：退出登录也保留，下次在同一个浏览器登录不会多占一个设备名额 */
+  function deviceCookie(id, secure) {
+    const parts = [`${DEVICE_COOKIE}=${id}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', `Max-Age=${10 * 365 * 24 * 3600}`];
     if (secure) parts.push('Secure');
     return parts.join('; ');
   }
@@ -85,5 +95,5 @@ export function createAuth({ accessPassword, cookieSecret, now = () => Date.now(
     return { ok: false, left: MAX_FAILS - f.count };
   }
 
-  return { issue, verify, cookie, tryLogin, ownerVersion: pwVersion };
+  return { issue, verify, cookie, deviceCookie, tryLogin, ownerVersion: pwVersion };
 }
