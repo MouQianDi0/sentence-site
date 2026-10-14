@@ -5,7 +5,7 @@ WORKDIR /app
 
 # 依赖默认走腾讯云 npm 镜像；GitHub Actions 里构建时传入官方源
 ARG NPM_REGISTRY=https://mirrors.cloud.tencent.com/npm/
-COPY package.json package-lock.json .npmrc ./
+COPY package.json package-lock.json .npmrc tsconfig.base.json ./
 COPY shared/package.json shared/
 COPY api/package.json api/
 COPY web/package.json web/

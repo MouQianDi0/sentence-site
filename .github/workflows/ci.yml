@@ -15,6 +15,11 @@ concurrency:
 permissions:
   contents: read
 
+defaults:
+  run:
+    # 明确用 bash：这样会带上 pipefail，管道（| tee）前面的命令出错时这一步也会失败
+    shell: bash
+
 env:
   # 仓库里的 .npmrc 用的是腾讯云镜像（给国内服务器用），GitHub 上直接用官方源
   npm_config_registry: https://registry.npmjs.org/
