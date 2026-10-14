@@ -1,0 +1,34 @@
+name: bootstrap
+on:
+  push:
+    branches: [ci-probe]
+permissions:
+  contents: write
+jobs:
+  deps:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: install
+        env:
+          npm_config_registry: https://registry.npmjs.org/
+        run: |
+          npm install --no-audit --no-fund
+          node -v; npx tsc -v; npx vite --version; npx eslint --version; npx prettier --version
+          echo "::notice title=versions::node $(node -v) ts $(npx tsc -v) vite $(npx vite --version) eslint $(npx eslint --version) prettier $(npx prettier --version)"
+          grep -c '"node_modules/@rollup/rollup-linux-x64-musl"' package-lock.json && echo "::notice title=musl::rollup musl entry present"
+      - name: push cache branch
+        run: |
+          tar -cf - node_modules package-lock.json | xz -T0 -6 > /tmp/deps.tar.xz
+          echo "::notice title=size::$(du -h /tmp/deps.tar.xz | cut -f1)"
+          git config user.name github-actions
+          git config user.email github-actions@users.noreply.github.com
+          git checkout --orphan ci-cache
+          git rm -rfq .
+          cp /tmp/deps.tar.xz .
+          git add deps.tar.xz
+          git commit -qm "deps cache"
+          git push -qf origin ci-cache
