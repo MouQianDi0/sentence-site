@@ -48,18 +48,24 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # 每一步的输出另存一份，出错时把最后几十行贴到检查结果里（不用点开日志就能看到原因）
       - name: 安装依赖
-        run: npm ci
+        run: npm ci 2>&1 | tee "$RUNNER_TEMP/step.log"
       - name: 代码格式（Prettier）
-        run: npm run format:check
+        run: npm run format:check 2>&1 | tee "$RUNNER_TEMP/step.log"
       - name: 代码检查（ESLint）
-        run: npm run lint
+        run: npm run lint 2>&1 | tee "$RUNNER_TEMP/step.log"
       - name: 类型检查（TypeScript）
-        run: npm run typecheck
+        run: npm run typecheck 2>&1 | tee "$RUNNER_TEMP/step.log"
       - name: 后端测试
-        run: npm test
+        run: npm test 2>&1 | tee "$RUNNER_TEMP/step.log"
       - name: 前端构建
-        run: npm run build
+        run: npm run build 2>&1 | tee "$RUNNER_TEMP/step.log"
+      - name: 把出错的输出贴到检查结果里
+        if: failure()
+        run: |
+          body=$(grep -v '^\s*$' "$RUNNER_TEMP/step.log" | tail -n 60 | sed 's/%/%25/g; s/\r//g' | sed ':a;N;$!ba;s/\n/%0A/g')
+          echo "::error title=出错的输出（最后 60 行）::$body"
 
   docker:
     name: Docker 镜像构建 + 整站启动
@@ -77,7 +83,7 @@ jobs:
       - name: 构建并启动
         env:
           NPM_REGISTRY: https://registry.npmjs.org/
-        run: docker compose up -d --build
+        run: docker compose up -d --build 2>&1 | tee "$RUNNER_TEMP/step.log"
       - name: 等网站起来
         run: |
           for i in $(seq 1 40); do
@@ -98,7 +104,10 @@ jobs:
           [ "$code" = 200 ] || { echo "::error::登录失败（$code）"; exit 1; }
       - name: 出错时打印日志
         if: failure()
-        run: docker compose logs --tail 100 --no-color
+        run: |
+          docker compose logs --tail 100 --no-color | tee -a "$RUNNER_TEMP/step.log"
+          body=$(grep -v '^\s*$' "$RUNNER_TEMP/step.log" | tail -n 60 | sed 's/%/%25/g; s/\r//g' | sed ':a;N;$!ba;s/\n/%0A/g')
+          echo "::error title=出错的输出（最后 60 行）::$body"
       - name: 清理
         if: always()
         run: docker compose down -v
