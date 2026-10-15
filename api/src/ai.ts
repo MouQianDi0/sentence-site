@@ -14,8 +14,8 @@ import type { AppConfig } from './config.ts';
 import * as repo from './repo.ts';
 import type { AccountRow, UsageField } from './repo.ts';
 import { HttpError } from './http.ts';
-import { LlmError, type Llm } from './llm.ts';
-import { gradePrompt, lookupPrompt, generatePrompt, reviewPrompt } from './prompts.ts';
+import { LlmError, type ChatJsonResult, type Llm, type LlmErrorCode } from './llm.ts';
+import { gradePrompt, lookupPrompt, generatePrompt, reviewPrompt, summaryPrompt } from './prompts.ts';
 import { extractMarks, locate, markByIndex } from './predicates.ts';
 import { checkSentence } from './validate.ts';
 import { shanghaiDate, shanghaiClock } from './time.ts';
@@ -90,6 +90,21 @@ export function cleanFeedback(input: unknown, text: string): CleanFeedback {
     better: str(data?.better, 600),
   };
 }
+
+/** 回复里三项分数都给了数字才算一次有效评分，缺分数的不能拿来平均 */
+const hasScores = (input: unknown): boolean => {
+  const d = obj(input);
+  return ['acc', 'flu', 'comp'].every((k) => d?.[k] !== null && d?.[k] !== '' && Number.isFinite(Number(d?.[k])));
+};
+
+/** 每次批改在后台做几次独立评分，分数取平均 */
+export const GRADE_RUNS = 5;
+/** 这几种错误再试一次可能就好了 */
+const RETRYABLE: LlmErrorCode[] = ['invalid_json', 'rate_limited', 'upstream'];
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+/** 几次请求的 token 数加起来；都没有时是 null */
+const sumTokens = (xs: (number | null)[]): number | null =>
+  xs.some((x) => x !== null) ? xs.reduce<number>((s, x) => s + (x ?? 0), 0) : null;
 
 const markKey = (segs: Seg[]) =>
   extractMarks(segs)
@@ -200,32 +215,119 @@ export function createAi({
     await checkLimit(account, 'grades', cfg.limits.grade, '今天的批改次数用完了（{n} 次），明天再来');
     const L = await llmFor(account);
 
-    let result: Awaited<ReturnType<Llm['chatJson']>> | undefined;
-    for (let i = 0; i < 2; i++) {
+    // 1. 后台并行做 GRADE_RUNS 次独立评分。每次都是一个全新的请求（只有系统提示 + 这一句的批改提示词，
+    //    不带任何对话记录），几次之间互相看不到，也不会串到别的句子，分数取平均，减少单次评分的偶然性。
+    const prompt = gradePrompt(sentence, text);
+    const settled = await Promise.allSettled(Array.from({ length: GRADE_RUNS }, () => gradeOnce(L, prompt, text)));
+    const runs = settled.flatMap((s) => (s.status === 'fulfilled' ? [s.value] : []));
+    const failed = settled.flatMap((s) => (s.status === 'rejected' ? [s.reason as unknown] : []));
+    if (!runs.length) throw toHttpError(failed[0]);
+    if (failed.length) {
+      const why = failed.map((e) => (e as Error).message).join('；');
+      log.warn?.(`[ai] ${GRADE_RUNS} 次评分有 ${failed.length} 次没成功，按 ${runs.length} 次取平均：${why}`);
+    }
+    const mean = (k: 'acc' | 'flu' | 'comp') => Math.round(runs.reduce((s, r) => s + r.fb[k], 0) / runs.length);
+    const acc = mean('acc');
+    const flu = mean('flu');
+    const comp = mean('comp');
+    const total = acc + flu + comp;
+
+    // 2. 再开一次新的对话，把几次评分交给它汇总成一份批注（只写文字，分数用上面的平均分）。
+    //    汇总没做成时，用总分最接近平均分的那一次的批注。
+    let note: Feedback = runs[0]?.fb ?? { level: '', good: [], issues: [], better: '' };
+    let summary: ChatJsonResult | null = null;
+    if (runs.length > 1) {
       try {
-        result = await L.chatJson({ prompt: gradePrompt(sentence, text), model: L.models().main, maxTokens: 1500 });
-        break;
+        const s = await summarize(L, sentence, text, runs, { acc, flu, comp, total });
+        [note, summary] = [s.note, s.result];
       } catch (e) {
-        if (e instanceof LlmError && e.code === 'invalid_json' && i === 0) continue;
-        throw toHttpError(e);
+        log.warn?.(`[ai] 汇总批注没做成，用最接近平均分的一次：${(e as Error).message}`);
+        note = runs.reduce((best, r) => (Math.abs(r.fb.total - total) < Math.abs(best.fb.total - total) ? r : best)).fb;
       }
     }
-    if (!result) throw new HttpError(502, 'AI 返回的格式不对');
-    const fb = cleanFeedback(result.data, text);
+
+    const calls = [...runs.map((r) => r.result), ...(summary ? [summary] : [])];
     const attempt = await repo.insertAttempt({
       sentenceId: sentence.id,
       text,
-      acc: fb.acc,
-      flu: fb.flu,
-      comp: fb.comp,
-      total: fb.total,
-      feedback: { level: fb.level, good: fb.good, issues: fb.issues, better: fb.better },
-      model: result.model,
-      inputTokens: result.usage.input,
-      outputTokens: result.usage.output,
+      acc,
+      flu,
+      comp,
+      total,
+      feedback: {
+        level: note.level,
+        good: note.good,
+        issues: note.issues,
+        better: note.better,
+        runs: runs.map((r) => ({ acc: r.fb.acc, flu: r.fb.flu, comp: r.fb.comp })),
+      },
+      model: (summary ?? runs[0]?.result)?.model ?? null,
+      inputTokens: sumTokens(calls.map((c) => c.usage.input)),
+      outputTokens: sumTokens(calls.map((c) => c.usage.output)),
     });
     await repo.bumpUsage(account.id, shanghaiDate(), 'grades');
     return attempt;
+  }
+
+  /**
+   * 一次独立评分：单独的新请求，不带上下文。回复不是 JSON 或缺分数、限流、接口出错时再试一次；
+   * 密钥无效、没配置、超时这类直接算失败。
+   */
+  async function gradeOnce(
+    L: Llm,
+    prompt: string,
+    text: string,
+  ): Promise<{ fb: CleanFeedback; result: ChatJsonResult }> {
+    let lastError: unknown;
+    for (let i = 0; i < 2; i++) {
+      try {
+        const result = await L.chatJson({ prompt, model: L.models().main, maxTokens: 1500, temperature: 0.5 });
+        if (!hasScores(result.data)) throw new LlmError('invalid_json', 'AI 评分时没给出分数');
+        return { fb: cleanFeedback(result.data, text), result };
+      } catch (e) {
+        lastError = e;
+        if (!(e instanceof LlmError) || !RETRYABLE.includes(e.code)) break;
+        if (e.code === 'rate_limited') await sleep(800 + Math.random() * 1200);
+      }
+    }
+    throw lastError;
+  }
+
+  /** 汇总批注：又一次单独的新请求，只看这一句和几次评分的结果 */
+  async function summarize(
+    L: Llm,
+    sentence: Sentence,
+    text: string,
+    runs: { fb: CleanFeedback }[],
+    avg: { acc: number; flu: number; comp: number; total: number },
+  ): Promise<{ note: Feedback; result: ChatJsonResult }> {
+    const prompt = summaryPrompt(
+      sentence,
+      text,
+      runs.map(({ fb }) => ({
+        acc: fb.acc,
+        flu: fb.flu,
+        comp: fb.comp,
+        level: fb.level,
+        good: fb.good,
+        issues: fb.issues,
+        better: fb.better,
+      })),
+      avg,
+    );
+    let lastError: unknown;
+    for (let i = 0; i < 2; i++) {
+      try {
+        const result = await L.chatJson({ prompt, model: L.models().main, maxTokens: 1500, temperature: 0.2 });
+        const fb = cleanFeedback(result.data, text);
+        if (!fb.level) throw new LlmError('invalid_json', '汇总批注缺少总评');
+        return { note: { level: fb.level, good: fb.good, issues: fb.issues, better: fb.better }, result };
+      } catch (e) {
+        lastError = e;
+        if (!(e instanceof LlmError) || !RETRYABLE.includes(e.code)) break;
+      }
+    }
+    throw lastError;
   }
 
   async function lookup(account: Account, sentenceId: unknown, rawWord: unknown): Promise<LookupResult> {

@@ -101,6 +101,8 @@ export interface FakeCall {
 export type FakeReply = (prompt: string, data: any) => unknown;
 export interface FakeHandlers {
   grade?: FakeReply;
+  /** 汇总批注；没指定时回复一份固定的批注 */
+  summary?: FakeReply;
   lookup?: FakeReply;
   generate?: FakeReply;
   ping?: FakeReply;
@@ -141,18 +143,22 @@ export function startFakeLlm(handlers: FakeHandlers): Promise<FakeLlm> {
       };
       const prompt = data.messages.at(-1)?.content ?? '';
       calls.push({ path: req.url, auth: req.headers.authorization, data, prompt });
-      const kind: 'grade' | 'lookup' | 'ping' | 'review' | 'generate' = prompt.includes('<student_translation>')
-        ? 'grade'
-        : prompt.includes('解释英文单词')
-          ? 'lookup'
-          : prompt.includes('连接测试')
-            ? 'ping'
-            : prompt.includes('逐句核对句子里')
-              ? 'review'
-              : 'generate';
+      const kind: 'summary' | 'grade' | 'lookup' | 'ping' | 'review' | 'generate' = prompt.includes('汇总多份独立批改')
+        ? 'summary'
+        : prompt.includes('<student_translation>')
+          ? 'grade'
+          : prompt.includes('解释英文单词')
+            ? 'lookup'
+            : prompt.includes('连接测试')
+              ? 'ping'
+              : prompt.includes('逐句核对句子里')
+                ? 'review'
+                : 'generate';
       if (kind === 'ping' && !handlers.ping) handlers.ping = () => ({ ok: true });
       // 没指定时，复核一律回复“没有意见”，句子保持原样
       if (kind === 'review' && !handlers.review) handlers.review = () => ({ items: [] });
+      if (kind === 'summary' && !handlers.summary)
+        handlers.summary = () => ({ level: '汇总点评', good: [], issues: [], better: '' });
       // 模拟不认识 thinking 参数的严格接口
       if (handlers.strict && ('thinking' in data || 'enable_thinking' in data)) {
         res.writeHead(400, { 'Content-Type': 'application/json' });

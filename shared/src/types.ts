@@ -116,11 +116,20 @@ export interface Issue {
   fix: string;
 }
 
+/** 后台每一次独立评分的三项分数 */
+export interface RunScore {
+  acc: number;
+  flu: number;
+  comp: number;
+}
+
 export interface Feedback {
   level: string;
   good: string[];
   issues: Issue[];
   better: string;
+  /** 后台几次独立评分各自的分数（页面不显示，留着核对；旧记录没有） */
+  runs?: RunScore[];
 }
 
 export interface Attempt {

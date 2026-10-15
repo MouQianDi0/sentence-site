@@ -79,20 +79,22 @@ const devSentence = (level: string, i: number) => {
   };
 };
 
+/** 假批改：把译文开头几个字标成“用词”问题。评分和汇总批注都用它（汇总只要文字） */
+const demoFeedback = (prompt: string) => {
+  const text = /<student_translation>\n([\s\S]*?)\n<\/student_translation>/.exec(prompt)?.[1] || '';
+  const piece = text.slice(0, Math.min(4, text.length));
+  return {
+    level: '意思基本对，语序还可以更自然',
+    good: ['主干理解正确'],
+    issues: piece ? [{ src: piece, type: '用词', why: '这里可以说得更地道', fix: '改进后' }] : [],
+    better: `改进后${text.slice(piece.length)}`,
+  };
+};
+
 const fake = await startFakeLlm({
-  grade: (prompt) => {
-    const text = /<student_translation>\n([\s\S]*?)\n<\/student_translation>/.exec(prompt)?.[1] || '';
-    const piece = text.slice(0, Math.min(4, text.length));
-    return {
-      acc: 31,
-      flu: 22,
-      comp: 26,
-      level: '意思基本对，语序还可以更自然',
-      good: ['主干理解正确'],
-      issues: piece ? [{ src: piece, type: '用词', why: '这里可以说得更地道', fix: '改进后' }] : [],
-      better: `改进后${text.slice(piece.length)}`,
-    };
-  },
+  // 后台几次评分的分数略有出入，取平均
+  grade: (prompt) => ({ acc: 29 + Math.floor(Math.random() * 5), flu: 22, comp: 26, ...demoFeedback(prompt) }),
+  summary: (prompt) => demoFeedback(prompt),
   lookup: () => ({ lemma: 'example', ipa: '/ɪɡˈzæmpəl/', pos: 'n.', zh: '例子（假模型）', more: '榜样；样本' }),
   // 按提示词里“按顺序出：第 1 句 CET-6，…”的难度出几句能通过校验的句子
   generate: (prompt) => {
