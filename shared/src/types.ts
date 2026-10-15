@@ -202,7 +202,16 @@ export interface TokenStats {
 // ---- 账户 --------------------------------------------------------------------
 export type AccountRole = 'owner' | 'member';
 
-export type Session = { unlocked: false } | { unlocked: true; role: AccountRole; name: string };
+/** 邀请码能选的有效期（天）；null 表示永久。后端 accounts.ts、前端 invites.ts 各有一份同样的列表 */
+export type ValidDays = 30 | 90 | 180 | 360;
+
+/**
+ * GET /api/session。notice：没登录的原因（比如邀请码过期了），登录页上显示。
+ * expiresAt：邀请账户的到期时间（永久或你自己是 null）
+ */
+export type Session =
+  | { unlocked: false; notice?: string }
+  | { unlocked: true; role: AccountRole; name: string; expiresAt?: string | null };
 
 export interface Device {
   id: string;
@@ -223,6 +232,14 @@ export interface Invite {
   devices: Device[];
   /** 这个账户用掉的 token（输入 + 输出）：近 30 天、累计 */
   tokens: { last30: number; total: number };
+  /** 有效期天数（30 / 90 / 180 / 360），null 表示永久。从对方第一次登录开始算 */
+  validDays: ValidDays | null;
+  /** 第一次登录的时间，还没登录过是 null */
+  activatedAt: string | null;
+  /** 到期时间；永久或还没登录过是 null */
+  expiresAt: string | null;
+  /** 已经过期：对方登不进来，数据还在，改有效期就能续上 */
+  expired: boolean;
 }
 
 // ---- 设置 --------------------------------------------------------------------

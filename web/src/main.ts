@@ -4,7 +4,7 @@ import { api } from './lib/api.ts';
 import { $ } from './lib/dom.ts';
 import { esc } from './lib/format.ts';
 import { state } from './state.ts';
-import { initLock, showLock } from './lock.ts';
+import { initLock, remindExpiry, showLock } from './lock.ts';
 import { initViews, renderAll } from './views.ts';
 import { initRecords } from './records.ts';
 import { initSettings } from './settings/index.ts';
@@ -35,10 +35,11 @@ api
   .session()
   .then((s) => {
     if (!s.unlocked) {
-      showLock(true);
+      showLock(true, s.notice); // notice：比如邀请码过期了
       return;
     }
-    state.me = { role: s.role, name: s.name };
+    state.me = { role: s.role, name: s.name, expiresAt: s.expiresAt ?? null };
+    remindExpiry(state.me);
     void start();
   })
   .catch((e: Error) => {

@@ -2,8 +2,10 @@
 // 一个邀请码对应一个账户，邀请码就是它的登录密码；删除邀请码就删除这个账户和它的全部数据。
 // 邀请账户用 AI 时用它自己在“设置”里填的模型和 API 密钥，不会用到你的。
 // 每个邀请码最多能在 deviceLimit 台设备上登录（默认 2）：设备编号是网站发给浏览器的随机串，你可以在管理页移除设备。
+// 有效期（30 / 90 / 180 / 360 天或永久）从对方第一次登录开始算；到期后登不进来、已登录的也会退出，
+// 数据都保留，你在管理页改一下有效期（从改的时候重新算）就能续上。
 import crypto from 'node:crypto';
-import type { Invite } from '@sentence-site/shared';
+import type { Invite, ValidDays } from '@sentence-site/shared';
 import type { AppConfig } from './config.ts';
 import * as repo from './repo.ts';
 import { daysAgo } from './tokens.ts';
@@ -46,6 +48,24 @@ const cleanNote = (v: unknown) =>
     .slice(0, 30);
 
 export const MAX_DEVICES = 10;
+
+/** 能选的有效期（天）；null 表示永久。前端 web/src/settings/invites.ts 有一份同样的列表 */
+export const VALID_DAYS: ValidDays[] = [30, 90, 180, 360];
+
+/** 管理页传来的有效期：30 / 90 / 180 / 360，或者 null（永久）；别的值报错 */
+export function parseValidDays(v: unknown): ValidDays | null {
+  if (v === null || v === undefined || v === '' || v === 'forever') return null;
+  const n = Number(v);
+  if (!VALID_DAYS.includes(n as ValidDays)) throw new HttpError(400, '有效期只能选 30、90、180、360 天或永久');
+  return n as ValidDays;
+}
+
+/** 已经过期了吗（永久、还没登录过的都不算） */
+export const isExpired = (acc: Pick<AccountRow, 'expiresAt'>, now = Date.now()): boolean =>
+  Boolean(acc.expiresAt) && Date.parse(acc.expiresAt ?? '') <= now;
+
+/** 过期后登录、或者用着用着过期了时的提示 */
+export const EXPIRED_MESSAGE = '这个邀请码已经过期了，请联系管理员续期。你的句库和练习记录都还在，续期后就能接着用。';
 /** 网站发给浏览器的设备编号：22 位随机串 */
 export const newDeviceId = () => crypto.randomBytes(16).toString('base64url');
 export const isDeviceId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{22}$/.test(v);
@@ -109,6 +129,10 @@ export function createAccounts(cfg: Pick<AppConfig, 'cookieSecret'>) {
     deviceLimit: a.deviceLimit,
     devices: devices.map(({ id, label, ip, firstSeen, lastSeen }) => ({ id, label, ip, firstSeen, lastSeen })),
     tokens: { last30: used.recent, total: used.total },
+    validDays: (a.validDays as ValidDays | null) ?? null,
+    activatedAt: a.activatedAt,
+    expiresAt: a.expiresAt,
+    expired: isExpired(a),
   });
 
   /** 每个账户用掉的 token：近 30 天（含今天）和累计 */
@@ -119,8 +143,8 @@ export function createAccounts(cfg: Pick<AppConfig, 'cookieSecret'>) {
     normalizeCode(input).length === 8 ? repo.findAccountByCode(codeHash(input)) : null;
 
   /**
-   * 校验 cookie 里的账户还在、版本对得上；邀请账户还要这台设备没被移除。
-   * 顺便更新“最近使用”（10 分钟最多写一次）。
+   * 校验 cookie 里的账户还在、版本对得上；邀请账户还要这台设备没被移除、邀请码没过期。
+   * 过期了抛出 401 并说明原因（登录页上显示）。顺便更新“最近使用”（10 分钟最多写一次）。
    */
   async function resolve(token: Token | null, ownerVersion: string, ip = ''): Promise<AccountRow | null> {
     if (!token?.a) return null;
@@ -128,6 +152,7 @@ export function createAccounts(cfg: Pick<AppConfig, 'cookieSecret'>) {
     if (!acc) return null;
     const ok = acc.role === 'owner' ? token.v === ownerVersion : token.v === memberVersion(acc);
     if (!ok) return null;
+    if (acc.role === 'member' && isExpired(acc)) throw new HttpError(401, EXPIRED_MESSAGE);
     if (acc.role === 'member') {
       const device = isDeviceId(token.d) ? await repo.getDevice(acc.id, token.d) : null;
       if (!device) return null;
@@ -140,6 +165,14 @@ export function createAccounts(cfg: Pick<AppConfig, 'cookieSecret'>) {
       repo.touchAccount(acc.id).catch(() => {});
     }
     return acc;
+  }
+
+  /** 邀请账户登录：过期了就不让进（不登记设备）；第一次登录时开始算有效期。返回最新的账户信息 */
+  async function checkIn(acc: AccountRow): Promise<AccountRow> {
+    if (isExpired(acc)) throw new HttpError(403, EXPIRED_MESSAGE);
+    if (acc.activatedAt) return acc;
+    await repo.activateAccount(acc.id);
+    return (await repo.getAccount(acc.id)) ?? acc;
   }
 
   /**
@@ -177,6 +210,15 @@ export function createAccounts(cfg: Pick<AppConfig, 'cookieSecret'>) {
     return one(id);
   }
 
+  /**
+   * 改有效期（30 / 90 / 180 / 360 天，null 是永久）。对方登录过的从现在开始重新算，所以过期的账户改一下就续上了；
+   * 还没登录过的仍从第一次登录开始算。
+   */
+  async function setValidity(id: string, v: unknown): Promise<Invite> {
+    if (!(await repo.setValidity(id, parseValidDays(v)))) throw new HttpError(404, '这个邀请码不存在');
+    return one(id);
+  }
+
   /** 移除一台设备：它马上退出登录，空出的名额可以给别的设备用 */
   async function removeDevice(id: string, deviceId: string): Promise<Invite> {
     if (!(await repo.deleteDevice(id, deviceId))) throw new HttpError(404, '这台设备不存在');
@@ -193,7 +235,9 @@ export function createAccounts(cfg: Pick<AppConfig, 'cookieSecret'>) {
     );
   }
 
+  /** 生成邀请码。body：{note 备注名, validDays 有效期天数（不传或 null 是永久）} */
   async function create(body: JsonBody = {}): Promise<Invite> {
+    const validDays = parseValidDays(body.validDays);
     for (let tries = 0; tries < 5; tries++) {
       const code = newCode();
       const id = newId();
@@ -203,6 +247,7 @@ export function createAccounts(cfg: Pick<AppConfig, 'cookieSecret'>) {
           note: cleanNote(body.note),
           codeHash: codeHash(code),
           codeEnc: encrypt(code, cfg.cookieSecret),
+          validDays,
         })
       ) {
         return one(id);
@@ -215,5 +260,16 @@ export function createAccounts(cfg: Pick<AppConfig, 'cookieSecret'>) {
     if (!(await repo.deleteMember(id))) throw new HttpError(404, '这个邀请码不存在');
   }
 
-  return { findByCode, resolve, useDevice, list, create, remove, setDeviceLimit, removeDevice };
+  return {
+    findByCode,
+    resolve,
+    checkIn,
+    useDevice,
+    list,
+    create,
+    remove,
+    setDeviceLimit,
+    setValidity,
+    removeDevice,
+  };
 }

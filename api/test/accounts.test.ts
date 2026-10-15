@@ -104,8 +104,9 @@ test('只有 owner 能生成、查看、删除邀请码；邀请码登录后是 
   try {
     const login = await m.api('POST', '/api/unlock', { password: inv.code.toLowerCase().replace('-', '') });
     assert.equal(login.status, 200, JSON.stringify(login.body));
-    assert.deepEqual(login.body, { ok: true, unlocked: true, role: 'member', name: '小王' });
-    assert.deepEqual((await m.api('GET', '/api/session')).body, { unlocked: true, role: 'member', name: '小王' });
+    const who = { unlocked: true, role: 'member', name: '小王', expiresAt: null }; // 永久有效：没有到期时间
+    assert.deepEqual(login.body, { ok: true, ...who });
+    assert.deepEqual((await m.api('GET', '/api/session')).body, who);
     for (const [method, path] of [
       ['GET', '/api/admin/invites'],
       ['POST', '/api/admin/invites'],

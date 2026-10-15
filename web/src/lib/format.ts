@@ -31,6 +31,17 @@ export function fmtTokens(n: number | null | undefined): string {
   return `${Number((v / 100_000_000).toPrecision(3))} 亿`;
 }
 
+/** ISO 时间 → 11月15日（本机时区）；不是今年的加上年份：2027年11月15日 */
+export function fmtDate(iso: string | null | undefined): string {
+  const d = new Date(iso ?? '');
+  if (Number.isNaN(d.getTime())) return '';
+  const md = `${d.getMonth() + 1}月${d.getDate()}日`;
+  return d.getFullYear() === new Date().getFullYear() ? md : `${d.getFullYear()}年${md}`;
+}
+
+/** 离这个时间还有几天（不足一天算 1 天；已经过了是 0 或负数） */
+export const daysUntil = (iso: string): number => Math.ceil((Date.parse(iso) - Date.now()) / 86_400_000);
+
 export type Tone = 'good' | 'mid' | 'low';
 export const scoreTone = (n: number): Tone => (n >= 85 ? 'good' : n >= 60 ? 'mid' : 'low');
 

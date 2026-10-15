@@ -24,6 +24,12 @@ export interface AccountRow {
   deviceLimit: number;
   createdAt: string;
   lastSeenAt: string | null;
+  /** 有效期天数（30 / 90 / 180 / 360），null 表示永久 */
+  validDays: number | null;
+  /** 第一次登录的时间（有效期从这时开始算），还没登录过是 null */
+  activatedAt: string | null;
+  /** 到期时间；永久或还没登录过是 null */
+  expiresAt: string | null;
 }
 
 /** devices 表的一行 */
@@ -404,7 +410,8 @@ export async function tokensByAccount(from: string): Promise<Record<string, { re
 
 // ---- accounts ----------------------------------------------------------------
 const ACCOUNT_COLS = `id, role, note, code_hash AS "codeHash", code_enc AS "codeEnc", practice, device_limit AS "deviceLimit",
-  to_json(created_at)#>>'{}' AS "createdAt", to_json(last_seen_at)#>>'{}' AS "lastSeenAt"`;
+  to_json(created_at)#>>'{}' AS "createdAt", to_json(last_seen_at)#>>'{}' AS "lastSeenAt",
+  valid_days AS "validDays", to_json(activated_at)#>>'{}' AS "activatedAt", to_json(expires_at)#>>'{}' AS "expiresAt"`;
 
 export async function getAccount(id: string): Promise<AccountRow | null> {
   const { rows } = await query<AccountRow>(`SELECT ${ACCOUNT_COLS} FROM accounts WHERE id = $1`, [id]);
@@ -427,37 +434,63 @@ export async function listMembers(): Promise<AccountRow[]> {
   return rows;
 }
 
-/** 每日自动出题要照顾的账户：owner，加上最近 days 天里登录过的邀请账户 */
+/** 每日自动出题要照顾的账户：owner，加上最近 days 天里登录过、还没过期的邀请账户 */
 export async function listActiveAccounts(days = 7): Promise<AccountRow[]> {
   const { rows } = await query<AccountRow>(
     `SELECT ${ACCOUNT_COLS} FROM accounts
-     WHERE role = 'owner' OR last_seen_at > now() - ($1::int * interval '1 day')
+     WHERE role = 'owner'
+        OR (last_seen_at > now() - ($1::int * interval '1 day') AND (expires_at IS NULL OR expires_at > now()))
      ORDER BY role DESC, created_at`,
     [days],
   );
   return rows;
 }
 
-/** 新建邀请账户；邀请码撞上已有的返回 false */
+/** 新建邀请账户；邀请码撞上已有的返回 false。validDays：有效期天数，null 表示永久 */
 export async function insertMember({
   id,
   note,
   codeHash,
   codeEnc,
+  validDays = null,
 }: {
   id: string;
   note: string;
   codeHash: string;
   codeEnc: string;
+  validDays?: number | null;
 }): Promise<boolean> {
   const { rows } = await query<{ id: string }>(
-    `INSERT INTO accounts (id, role, note, code_hash, code_enc)
-     VALUES ($1, 'member', $2, $3, $4)
+    `INSERT INTO accounts (id, role, note, code_hash, code_enc, valid_days)
+     VALUES ($1, 'member', $2, $3, $4, $5::int)
      ON CONFLICT DO NOTHING
      RETURNING id`,
-    [id, note, codeHash, codeEnc],
+    [id, note, codeHash, codeEnc, validDays],
   );
   return rows.length > 0;
+}
+
+/** 第一次登录：记下时间，有效期从这时开始算。已经登录过的不变 */
+export async function activateAccount(id: string): Promise<void> {
+  await query(
+    `UPDATE accounts SET activated_at = now(),
+       expires_at = CASE WHEN valid_days IS NULL THEN NULL ELSE now() + valid_days * interval '1 day' END
+     WHERE id = $1 AND activated_at IS NULL`,
+    [id],
+  );
+}
+
+/**
+ * 改有效期（null 表示永久）。登录过的账户从现在开始重新算（过期的也就续上了）；还没登录过的仍从第一次登录算。
+ */
+export async function setValidity(id: string, days: number | null): Promise<boolean> {
+  const { rowCount } = await query(
+    `UPDATE accounts SET valid_days = $2::int,
+       expires_at = CASE WHEN $2::int IS NULL OR activated_at IS NULL THEN NULL ELSE now() + $2::int * interval '1 day' END
+     WHERE id = $1 AND role = 'member'`,
+    [id, days],
+  );
+  return rowCount > 0;
 }
 
 /** 邀请账户自己的模型配置（没配过返回 null） */

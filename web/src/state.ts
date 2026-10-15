@@ -40,6 +40,8 @@ export interface FixState {
 export interface Me {
   role: AccountRole;
   name: string;
+  /** 邀请账户的到期时间；永久或你自己是 null */
+  expiresAt?: string | null;
 }
 
 const LS_UI = 'ssite-ui';

@@ -25,8 +25,9 @@ export class ApiError extends Error {
   }
 }
 
-let onUnauthorized = (): void => {};
-export const setUnauthorizedHandler = (fn: () => void): void => {
+/** 需要重新登录时调用；notice 是后端说的原因（比如邀请码过期了），普通的“没登录”时为空 */
+let onUnauthorized = (_notice: string): void => {};
+export const setUnauthorizedHandler = (fn: (notice: string) => void): void => {
   onUnauthorized = fn;
 };
 
@@ -48,11 +49,13 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   } catch {
     // 非 JSON 响应（比如 Nginx 的错误页）
   }
-  if (res.status === 401 && path !== '/api/unlock') onUnauthorized();
+  const msg = (data as { error?: unknown } | null)?.error;
+  if (res.status === 401 && path !== '/api/unlock') {
+    onUnauthorized(typeof msg === 'string' && !/需要先输入/.test(msg) ? msg : '');
+  }
   if (!res.ok) {
     const fallback =
       res.status === 502 || res.status === 504 ? '后端暂时没有响应，稍后再试' : `请求失败（${res.status}）`;
-    const msg = (data as { error?: unknown } | null)?.error;
     throw new ApiError(typeof msg === 'string' && msg ? msg : fallback, res.status);
   }
   return data as T;
@@ -68,7 +71,12 @@ export const api = {
 
   // 邀请码管理（只有你自己能用）
   invites: () => request<{ invites: Invite[] }>('GET', '/api/admin/invites'),
-  createInvite: (note: string) => request<{ invite: Invite }>('POST', '/api/admin/invites', { note }),
+  /** validDays：有效期天数（30 / 90 / 180 / 360），null 是永久 */
+  createInvite: (note: string, validDays: number | null) =>
+    request<{ invite: Invite }>('POST', '/api/admin/invites', { note, validDays }),
+  /** 改有效期：对方登录过的从现在开始重新算（过期的就续上了） */
+  setValidity: (id: string, validDays: number | null) =>
+    request<{ invite: Invite }>('PUT', `/api/admin/invites/${enc(id)}`, { validDays }),
   deleteInvite: (id: string) => request<{ ok: true }>('DELETE', `/api/admin/invites/${enc(id)}`),
   setDeviceLimit: (id: string, deviceLimit: number) =>
     request<{ invite: Invite }>('PUT', `/api/admin/invites/${enc(id)}`, { deviceLimit }),

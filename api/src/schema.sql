@@ -109,6 +109,18 @@ CREATE TABLE IF NOT EXISTS devices (
   PRIMARY KEY (account_id, device_id)
 );
 
+-- ---- 邀请码有效期：从对方第一次登录开始算，到期后停用（登不进来，数据保留），管理员改有效期就能续上 --------------
+-- valid_days：30 / 90 / 180 / 360，NULL 表示永久；activated_at：第一次登录的时间；
+-- expires_at：到期时间（第一次登录时 = 登录时间 + valid_days；登录过之后再改有效期 = 改的时候 + valid_days；永久或还没登录过是 NULL）
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS valid_days int;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS activated_at timestamptz;
+ALTER TABLE accounts ADD COLUMN IF NOT EXISTS expires_at timestamptz;
+-- 有效期功能上线前就登录过的邀请账户，用最早登录的设备时间（没有的话用最近使用时间）当作第一次登录
+UPDATE accounts a
+  SET activated_at = coalesce((SELECT min(d.first_seen) FROM devices d WHERE d.account_id = a.id), a.last_seen_at)
+  WHERE a.role = 'member' AND a.activated_at IS NULL
+    AND (a.last_seen_at IS NOT NULL OR EXISTS (SELECT 1 FROM devices d WHERE d.account_id = a.id));
+
 -- ---- token 用量：每次调用模型都记一笔，按账户、日期（北京时间）、用途、模型累加 ------------------
 -- kind：grade 批改 / lookup 查词 / generate 出题 / review 复核谓语 / test 测试连接
 -- 删除句子不影响（token 已经花出去了）；删除邀请账户会连带删除它的用量。

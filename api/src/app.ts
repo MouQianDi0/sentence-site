@@ -1,6 +1,6 @@
 // 路由和请求处理。createApp() 返回一个 (req, res) 处理函数，测试里也直接用它。
 import type { IncomingMessage, ServerResponse, OutgoingHttpHeaders } from 'node:http';
-import type { AccountRole, LlmTestItem } from '@sentence-site/shared';
+import type { AccountRole, Invite, LlmTestItem } from '@sentence-site/shared';
 import type { AppConfig } from './config.ts';
 import * as repo from './repo.ts';
 import type { AccountRow } from './repo.ts';
@@ -19,7 +19,7 @@ import {
 } from './settings.ts';
 import { createPractice, MAX_DAILY } from './practice.ts';
 import { metered, tokenStats } from './tokens.ts';
-import { createAccounts, memberVersion, newDeviceId, isDeviceId } from './accounts.ts';
+import { createAccounts, memberVersion, newDeviceId, isDeviceId, isExpired, EXPIRED_MESSAGE } from './accounts.ts';
 import { shanghaiDate } from './time.ts';
 
 /** 处理函数拿到的东西。不需要登录的接口里 account 是 null，不要读它 */
@@ -106,19 +106,26 @@ export function createApp(
     pub,
   );
 
-  // role：owner 是你自己，member 是邀请账户；name：邀请账户的备注名
-  const me = (acc: { role: AccountRole; note?: string }) => ({
+  // role：owner 是你自己，member 是邀请账户；name：邀请账户的备注名；expiresAt：邀请账户的到期时间（永久是 null）
+  const me = (acc: { role: AccountRole; note?: string; expiresAt?: string | null }) => ({
     unlocked: true as const,
     role: acc.role,
     name: acc.role === 'owner' ? '' : acc.note || '',
+    ...(acc.role === 'member' ? { expiresAt: acc.expiresAt ?? null } : {}),
   });
 
   router.add(
     'GET',
     '/api/session',
     async ({ req }) => {
-      const acc = await sessionOf(req);
-      return { body: acc ? me(acc) : { unlocked: false } };
+      try {
+        const acc = await sessionOf(req);
+        return { body: acc ? me(acc) : { unlocked: false } };
+      } catch (e) {
+        // 邀请码过期了：告诉登录页为什么要重新登录
+        if (e instanceof HttpError && e.status === 401) return { body: { unlocked: false, notice: e.message } };
+        throw e;
+      }
     },
     pub,
   );
@@ -139,13 +146,15 @@ export function createApp(
           headers: { 'Set-Cookie': auth.cookie(auth.issue(), secure) },
         };
       }
-      // 邀请账户：认这个浏览器的设备编号，新设备要占一个名额
-      const acc = r.account;
+      // 邀请账户：过期了不让进（也不占设备名额）；认这个浏览器的设备编号，新设备要占一个名额
+      let acc = r.account;
+      if (isExpired(acc)) throw new HttpError(403, EXPIRED_MESSAGE);
       const had = parseCookies(req.headers.cookie)[DEVICE_COOKIE];
       const device = isDeviceId(had) ? had : newDeviceId();
       if (!(await accounts.useDevice(acc, device, { ua: req.headers['user-agent'] || '', ip: clientIp(req) }))) {
         throw new HttpError(403, `这个邀请码已经在 ${acc.deviceLimit} 台设备上登录过了，请联系管理员移除不用的设备`);
       }
+      acc = await accounts.checkIn(acc); // 第一次登录：有效期从现在开始算
       const token = auth.issue(acc.id, memberVersion(acc), device);
       return {
         body: { ok: true, ...me(acc) },
@@ -265,13 +274,19 @@ export function createApp(
     async ({ req }) => ({ body: { invite: await accounts.create(await readJson(req)) } }),
     ownerOnly,
   );
-  // {deviceLimit}：这个邀请码最多能在几台设备上登录（1–10）
+  // {deviceLimit}：这个邀请码最多能在几台设备上登录（1–10）；
+  // {validDays}：有效期 30 / 90 / 180 / 360 天，null 是永久（对方登录过的从现在开始重新算）
   router.add(
     'PUT',
     '/api/admin/invites/:id',
-    async ({ req, params }) => ({
-      body: { invite: await accounts.setDeviceLimit(params.id, (await readJson(req)).deviceLimit) },
-    }),
+    async ({ req, params }) => {
+      const body = await readJson(req);
+      if (!('deviceLimit' in body) && !('validDays' in body)) throw new HttpError(400, '要改设备数或有效期');
+      let invite: Invite | null = null;
+      if ('validDays' in body) invite = await accounts.setValidity(params.id, body.validDays);
+      if ('deviceLimit' in body) invite = await accounts.setDeviceLimit(params.id, body.deviceLimit);
+      return { body: { invite } };
+    },
     ownerOnly,
   );
   // 移除一台设备：它马上退出登录，空出名额
