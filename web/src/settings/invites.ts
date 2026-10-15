@@ -1,10 +1,10 @@
 // 邀请码管理（只有你自己看得到）：从“设置”页的“邀请码管理”点进来的单独页面。
 // 生成邀请码、复制发给别人、删除。每个邀请码对应一个独立账户；删除邀请码会同时删除这个账户和它的全部数据。
-// 每个邀请码最多能在几台设备上登录（默认 2，可以调），能看到登录过的设备并移除。
+// 每个邀请码最多能在几台设备上登录（默认 2，可以调），能看到登录过的设备并移除；也能看到每个账户用掉的 token。
 import type { AccountRole, Invite } from '@sentence-site/shared';
 import { api } from '../lib/api.ts';
 import { closest } from '../lib/dom.ts';
-import { esc, fmtTime } from '../lib/format.ts';
+import { esc, fmtTime, fmtTokens } from '../lib/format.ts';
 import * as A from '../lib/anim.ts';
 import type { Toast } from '../lib/toast.ts';
 
@@ -140,6 +140,7 @@ export function createInvites({
       </div>
       <div class="flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-muted">
         <span>创建于 ${fmtTime(x.createdAt)}</span><span>${seen}</span>
+        <span>Token 近 30 天 <b class="font-medium text-ink">${esc(fmtTokens(x.tokens?.last30))}</b> · 累计 <b class="font-medium text-ink">${esc(fmtTokens(x.tokens?.total))}</b></span>
         <button type="button" data-act="delete" class="ml-auto cursor-pointer rounded-full border-[1.5px] px-3 py-1 text-[13px] ${confirming ? 'border-bad bg-bad-soft text-bad' : 'border-line bg-sheet text-muted'}">${confirming ? '确认删除？账户和数据一起删' : '删除'}</button>
       </div>
       ${devicesHTML(x)}
@@ -176,7 +177,7 @@ export function createInvites({
           <span class="ml-auto text-muted transition-transform group-open:rotate-90">${ICON.next}</span></summary>
         <ul class="m-0 mt-2.5 flex list-disc flex-col gap-1.5 pl-[1.15em] text-[13.5px] text-muted marker:text-line">
           <li>每个邀请码对应一个独立账户：对方在登录页输入邀请码就能用。句库、练习记录、每日任务和模型配置都和你的分开。</li>
-          <li>AI 用的是对方自己在“设置”里填的 API 密钥，不会用到你的。</li>
+          <li>AI 用的是对方自己在“设置”里填的 API 密钥，不会用到你的。每个邀请码下面显示的 token 用量花的是对方的额度，对方在自己的“设置 → Token 用量”里也能看到。</li>
           <li>每个邀请码只能在限定数量的设备（浏览器）上登录，超出的新设备会被拒绝。移除一台设备会让它马上退出、空出名额；对方清除浏览器数据或换浏览器，也算一台新设备。</li>
           <li>删除邀请码会同时删除这个账户和它的全部数据，不能恢复。</li>
           <li>登录页上也写了这些注意事项，对方第一次登录前能看到。</li>

@@ -45,7 +45,7 @@ cd /opt/sentence-site && sudo docker compose up -d --build
 
 ## 访问
 
-开了 HTTPS 以后打开 `https://服务器IP:8443`（还没开时是 `http://服务器IP:端口`，端口是 `.env` 里的 `WEB_PORT`），输入访问密码。练习、记录、设置各有自己的地址：`/practice`、`/records`、`/settings`（邀请码管理是 `/settings/invites`），刷新或收藏都会停在那一页；直接打开首页会回到上次停留的那一页。忘了密码可以看：
+开了 HTTPS 以后打开 `https://服务器IP:8443`（还没开时是 `http://服务器IP:端口`，端口是 `.env` 里的 `WEB_PORT`），输入访问密码。练习、记录、设置各有自己的地址：`/practice`、`/records`、`/settings`（邀请码管理是 `/settings/invites`，Token 用量是 `/settings/usage`），刷新或收藏都会停在那一页；直接打开首页会回到上次停留的那一页。忘了密码可以看：
 
 ```bash
 sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
@@ -120,6 +120,8 @@ sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 htt
 3. 点“获取模型列表”选模型（平台不提供列表时手动填写）
 4. 点“测试连接”，成功后点“保存”，立即生效，不用重启
 
+设置页的“Token 用量”能看到这个账户调用模型用掉了多少 token（今天、近 7 天、近 30 天、累计，按天的柱状图，按用途和模型分开），每个账户只看得到自己的；你自己在邀请码管理页还能看到每个邀请账户近 30 天和累计的用量。批改、查词、出题、复核谓语、测试连接每次调用模型都会记一笔（存在 `token_usage` 表），数字来自模型平台返回的用量。
+
 设置页的“AI 批改”里有个“准确度提升”开关（每个账户自己的，默认关）。关着时每次批改只调用 1 次模型；打开后在后台做 5 次独立评分（分数取平均，减少单次评分的偶然性），再用一次新的对话把这几次汇总成一份批注，所以一次批改会调用 6 次主力模型，慢一点、token 用量约是关着时的 6 倍。不管开没开，每日批改次数都按 1 次算。
 
 “关闭深度思考”默认开着：DeepSeek 等新模型默认会先“思考”再回答，批改和查词用不到，开着会慢很多、也更费钱。DeepSeek 推荐主力用 `deepseek-v4-pro`、轻量用 `deepseek-flash`。
@@ -147,7 +149,7 @@ sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 htt
 | POST | /api/unlock | 输入访问密码或邀请码，换 30 天有效的 Cookie（连续错 5 次锁 15 分钟） |
 | POST | /api/lock | 退出登录 |
 | GET | /api/session | 是否已登录、是哪种账户（`role`：owner 是你自己，member 是邀请账户；`name`：备注名） |
-| GET / POST | /api/admin/invites | 只有你自己能用：列出邀请码（含邀请码原文、创建时间、最近使用）；`{"note":"小王"}` 生成一个 |
+| GET / POST | /api/admin/invites | 只有你自己能用：列出邀请码（含邀请码原文、创建时间、最近使用、近 30 天和累计 token 用量）；`{"note":"小王"}` 生成一个 |
 | PUT | /api/admin/invites/:id | 只有你自己能用：`{"deviceLimit":3}` 改这个邀请码最多能在几台设备上登录（1–10） |
 | DELETE | /api/admin/invites/:id | 只有你自己能用：删除邀请码，连带删除这个账户和它的全部数据 |
 | DELETE | /api/admin/invites/:id/devices/:deviceId | 只有你自己能用：移除一台设备，它马上退出登录 |
@@ -163,6 +165,7 @@ sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 htt
 | POST | /api/grade | AI 批改。默认调用 1 次模型；开了准确度提升时后台并行 5 次独立评分取平均分，再用一次新的对话汇总成一份批注（每次都是不带上下文的单独请求；都只算 1 次批改） |
 | POST | /api/lookup | AI 查词（结果缓存在数据库） |
 | GET | /api/usage | 今天的 AI 用量和上限 |
+| GET | /api/usage/tokens?days=7\|30\|90 | 当前账户自己的 token 用量：今天、近 7 天、近 30 天、累计，按天、按用途、按模型分开 |
 | GET / PUT / DELETE | /api/settings/llm | 当前账户自己的模型配置。读取各平台配置；保存某个平台并切换过去（`provider` 字段）；`?provider=` 删除某个平台，不带参数改回 .env（密钥只返回打码后的） |
 | POST | /api/settings/llm/test | 用填写的配置测试连接（不保存） |
 | POST | /api/settings/llm/models | 获取平台的模型列表 |

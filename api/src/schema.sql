@@ -29,9 +29,9 @@ CREATE TABLE IF NOT EXISTS attempts (
   sentence_id   text REFERENCES sentences(id) ON DELETE CASCADE,
   text          text NOT NULL,
   acc smallint, flu smallint, comp smallint, total smallint,
-  feedback      jsonb,                      -- level / good / issues / better
+  feedback      jsonb,                      -- level / good / issues / better；开着准确度提升时还有 runs（每次评分的分数）
   model         text,
-  input_tokens  int, output_tokens int,
+  input_tokens  int, output_tokens int,      -- 这次批改所有模型请求加起来的用量
   created_at    timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS attempts_created_at_idx ON attempts (created_at);
@@ -70,7 +70,7 @@ CREATE TABLE IF NOT EXISTS accounts (
   code_hash    text UNIQUE,                     -- 邀请码的 sha256（登录时按它查找）
   code_enc     text,                            -- 邀请码密文（管理页显示用，COOKIE_SECRET 加密）
   llm          jsonb,                           -- 邀请账户自己的模型配置（格式同 settings 表的 llm，API 密钥加密）；你自己的在 settings 表
-  practice     jsonb,                           -- 每日任务设置 {levels,dailyCount}
+  practice     jsonb,                           -- 每日任务设置 {levels,dailyCount,autoDaily,dailyAt,accuracyBoost}
   created_at   timestamptz NOT NULL DEFAULT now(),
   last_seen_at timestamptz
 );
@@ -108,3 +108,29 @@ CREATE TABLE IF NOT EXISTS devices (
   last_ip    text,
   PRIMARY KEY (account_id, device_id)
 );
+
+-- ---- token 用量：每次调用模型都记一笔，按账户、日期（北京时间）、用途、模型累加 ------------------
+-- kind：grade 批改 / lookup 查词 / generate 出题 / review 复核谓语 / test 测试连接
+-- 删除句子不影响（token 已经花出去了）；删除邀请账户会连带删除它的用量。
+-- 第一次建表时顺便把以前批改记录里存的用量补进来（查词、出题以前没记，补不了）；表已经在就什么都不做。
+DO $$
+BEGIN
+  IF to_regclass('token_usage') IS NULL THEN
+    CREATE TABLE token_usage (
+      account_id    text NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+      day           date NOT NULL,
+      kind          text NOT NULL,
+      model         text NOT NULL DEFAULT '',
+      calls         int NOT NULL DEFAULT 0,
+      input_tokens  bigint NOT NULL DEFAULT 0,
+      output_tokens bigint NOT NULL DEFAULT 0,
+      PRIMARY KEY (account_id, day, kind, model)
+    );
+    INSERT INTO token_usage (account_id, day, kind, model, calls, input_tokens, output_tokens)
+    SELECT s.account_id, ((a.created_at AT TIME ZONE 'UTC') + interval '8 hours')::date, 'grade', coalesce(a.model, ''),
+           count(*), coalesce(sum(a.input_tokens), 0), coalesce(sum(a.output_tokens), 0)
+    FROM attempts a JOIN sentences s ON s.id = a.sentence_id
+    WHERE a.input_tokens IS NOT NULL OR a.output_tokens IS NOT NULL
+    GROUP BY 1, 2, 4;
+  END IF;
+END $$;

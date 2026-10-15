@@ -171,6 +171,34 @@ export interface Usage {
   aiReady: boolean;
 }
 
+// ---- token 用量 -----------------------------------------------------------------
+/** 用到模型的地方：批改、查词、出题、复核谓语、测试连接 */
+export type TokenKind = 'grade' | 'lookup' | 'generate' | 'review' | 'test';
+
+/** 一段时间里的用量：输入、输出 token 数和调用次数 */
+export interface TokenCount {
+  input: number;
+  output: number;
+  calls: number;
+}
+
+/** GET /api/usage/tokens?days=7|30|90：当前账户自己的用量 */
+export interface TokenStats {
+  /** daily、byKind、byModel 统计的是最近几天（含今天） */
+  days: number;
+  today: TokenCount;
+  last7: TokenCount;
+  last30: TokenCount;
+  total: TokenCount;
+  /** 每天的用量，从早到晚，没用的那天是 0 */
+  daily: (TokenCount & { day: string })[];
+  /** 这几天里按用途、按模型分开的用量，多的在前 */
+  byKind: (TokenCount & { kind: TokenKind })[];
+  byModel: (TokenCount & { model: string })[];
+  /** 最早有记录的那天（YYYY-MM-DD）；还没有记录时是 null */
+  since: string | null;
+}
+
 // ---- 账户 --------------------------------------------------------------------
 export type AccountRole = 'owner' | 'member';
 
@@ -193,6 +221,8 @@ export interface Invite {
   lastSeenAt: string | null;
   deviceLimit: number;
   devices: Device[];
+  /** 这个账户用掉的 token（输入 + 输出）：近 30 天、累计 */
+  tokens: { last30: number; total: number };
 }
 
 // ---- 设置 --------------------------------------------------------------------

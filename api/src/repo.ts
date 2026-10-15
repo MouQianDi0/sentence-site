@@ -325,6 +325,83 @@ export async function bumpUsage(accountId: string, day: string, field: UsageFiel
   );
 }
 
+// ---- token 用量（按账户、日期、用途、模型累加）-------------------------------------
+export interface TokenRow {
+  day: string;
+  kind: string;
+  model: string;
+  calls: number;
+  input: number;
+  output: number;
+}
+
+/** 记一次模型调用用掉的 token */
+export async function addTokens(t: {
+  accountId: string;
+  day: string;
+  kind: string;
+  model: string;
+  input: number;
+  output: number;
+}): Promise<void> {
+  await query(
+    `INSERT INTO token_usage (account_id, day, kind, model, calls, input_tokens, output_tokens)
+     VALUES ($1, $2::date, $3, $4, 1, $5, $6)
+     ON CONFLICT (account_id, day, kind, model) DO UPDATE SET
+       calls = token_usage.calls + 1,
+       input_tokens = token_usage.input_tokens + EXCLUDED.input_tokens,
+       output_tokens = token_usage.output_tokens + EXCLUDED.output_tokens`,
+    [t.accountId, t.day, t.kind, t.model, t.input, t.output],
+  );
+}
+
+// 求和结果是 numeric，pg 驱动会返回字符串，统一转成数字
+const num = (v: unknown): number => Number(v) || 0;
+
+/** 这个账户从 from（含）开始每天、每种用途、每个模型的用量 */
+export async function listTokens(accountId: string, from: string): Promise<TokenRow[]> {
+  const { rows } = await query<Record<string, unknown>>(
+    `SELECT to_char(day, 'YYYY-MM-DD') AS day, kind, model, calls, input_tokens AS input, output_tokens AS output
+     FROM token_usage WHERE account_id = $1 AND day >= $2::date
+     ORDER BY day`,
+    [accountId, from],
+  );
+  return rows.map((r) => ({
+    day: String(r.day),
+    kind: String(r.kind),
+    model: String(r.model ?? ''),
+    calls: num(r.calls),
+    input: num(r.input),
+    output: num(r.output),
+  }));
+}
+
+/** 这个账户累计的用量和最早有记录的那天 */
+export async function tokenTotal(
+  accountId: string,
+): Promise<{ calls: number; input: number; output: number; since: string | null }> {
+  const { rows } = await query<Record<string, unknown>>(
+    `SELECT coalesce(sum(calls), 0) AS calls, coalesce(sum(input_tokens), 0) AS input,
+            coalesce(sum(output_tokens), 0) AS output, to_char(min(day), 'YYYY-MM-DD') AS since
+     FROM token_usage WHERE account_id = $1`,
+    [accountId],
+  );
+  const r = rows[0] || {};
+  return { calls: num(r.calls), input: num(r.input), output: num(r.output), since: (r.since as string) || null };
+}
+
+/** 每个账户用掉的 token（输入 + 输出）：from（含）以来、累计。邀请码管理页用 */
+export async function tokensByAccount(from: string): Promise<Record<string, { recent: number; total: number }>> {
+  const { rows } = await query<Record<string, unknown>>(
+    `SELECT account_id AS id,
+            coalesce(sum(input_tokens + output_tokens) FILTER (WHERE day >= $1::date), 0) AS recent,
+            coalesce(sum(input_tokens + output_tokens), 0) AS total
+     FROM token_usage GROUP BY account_id`,
+    [from],
+  );
+  return Object.fromEntries(rows.map((r) => [String(r.id), { recent: num(r.recent), total: num(r.total) }]));
+}
+
 // ---- accounts ----------------------------------------------------------------
 const ACCOUNT_COLS = `id, role, note, code_hash AS "codeHash", code_enc AS "codeEnc", practice, device_limit AS "deviceLimit",
   to_json(created_at)#>>'{}' AS "createdAt", to_json(last_seen_at)#>>'{}' AS "lastSeenAt"`;

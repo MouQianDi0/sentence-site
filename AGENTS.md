@@ -4,7 +4,7 @@
 
 - `shared/`：前后端共用的接口数据类型（`types.ts`）、句子文本工具（`text.ts`）、知识点（`kb.ts`）。改接口返回的字段先改 `types.ts`，两边的类型检查会指出哪里要跟着改。
 - `api/`：后端，Node.js 22 直接运行 `.ts`（类型擦除，不编译），唯一运行依赖 `pg`。只能用能被擦除的 TS 语法（`erasableSyntaxOnly`：不要 enum、namespace、构造函数参数属性），相对路径的 import 要写 `.ts` 后缀，只引入类型时用 `import type`。后端只从 `@sentence-site/shared` 引入类型，不引入运行代码（生产镜像里没有 shared）。
-- `web/`：前端，Vite + Tailwind CSS v4 + GSAP。入口 `web/src/main.ts`；练习页在 `practice/`，设置页在 `settings/`，工具在 `lib/`。页面状态集中在 `state.ts`；练习、记录、设置各有地址（`/practice`、`/records`、`/settings`、`/settings/invites`），对应关系在 `router.ts`，新加页面也要在那里加地址。Tailwind 类名要完整写出来（不能拼接），写在 `web/index.html` 或 `web/src` 里会被自动扫描。
+- `web/`：前端，Vite + Tailwind CSS v4 + GSAP。入口 `web/src/main.ts`；练习页在 `practice/`，设置页在 `settings/`，工具在 `lib/`。页面状态集中在 `state.ts`；练习、记录、设置各有地址（`/practice`、`/records`、`/settings`，设置下面的单独页面 `/settings/invites`、`/settings/usage`），对应关系在 `router.ts`，新加页面也要在那里加地址。Tailwind 类名要完整写出来（不能拼接），写在 `web/index.html` 或 `web/src` 里会被自动扫描。
 - Docker Compose 部署，api 和 web 镜像在服务器上构建，构建上下文是仓库根目录。说明见 `README.md`。
 
 ## 先读出题规范
@@ -13,7 +13,7 @@
 
 ## 账户
 
-数据按账户隔离：`sentences.account_id` 指向 `accounts`，记录、批改、查词缓存跟着句子走，`ai_usage` 也带 `account_id`。`api/src/repo.ts` 里查句子的函数第一个参数都是 `accountId`，新写的查询也要带上，不能让一个账户读到别的账户的数据。你自己是 `owner`（访问密码登录），邀请账户是 `member`（邀请码登录）；只有 owner 能用 `/api/admin/*`。邀请账户的登录 Cookie 里带设备编号，每次请求都核对 `devices` 表，设备被移除就失效。模型配置按账户（`createSettingsHub`），邀请账户只用它自己填的 API 密钥，不能退回 `.env`。
+数据按账户隔离：`sentences.account_id` 指向 `accounts`，记录、批改、查词缓存跟着句子走，`ai_usage`、`token_usage` 也带 `account_id`。调用模型时用 `tokens.ts` 的 `metered()` 包一层，用掉的 token 才会记到账户名下。`api/src/repo.ts` 里查句子的函数第一个参数都是 `accountId`，新写的查询也要带上，不能让一个账户读到别的账户的数据。你自己是 `owner`（访问密码登录），邀请账户是 `member`（邀请码登录）；只有 owner 能用 `/api/admin/*`。邀请账户的登录 Cookie 里带设备编号，每次请求都核对 `devices` 表，设备被移除就失效。模型配置按账户（`createSettingsHub`），邀请账户只用它自己填的 API 密钥，不能退回 `.env`。
 
 ## 改完要做
 

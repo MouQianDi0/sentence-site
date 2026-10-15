@@ -1,4 +1,4 @@
-// 页面上用的格式化：转义 HTML、日期时间、分数档位、打乱顺序
+// 页面上用的格式化：转义 HTML、日期时间、分数档位、token 数、打乱顺序
 const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
 
 /** 拼进 HTML 的文字都要先转义 */
@@ -20,6 +20,15 @@ export function fmtTime(iso: string | null | undefined): string {
   const d = new Date(iso ?? '');
   if (Number.isNaN(d.getTime())) return '';
   return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** token 数：8,512 / 1.23 万 / 45.6 万 / 1.2 亿（保留三位有效数字） */
+export function fmtTokens(n: number | null | undefined): string {
+  const v = Math.max(0, Math.round(n ?? 0));
+  if (v < 10_000) return v.toLocaleString('en-US');
+  const wan = Number((v / 10_000).toPrecision(3));
+  if (wan < 10_000) return `${wan} 万`; // 99,999,999 四舍五入成 10000 万时改用“亿”
+  return `${Number((v / 100_000_000).toPrecision(3))} 亿`;
 }
 
 export type Tone = 'good' | 'mid' | 'low';

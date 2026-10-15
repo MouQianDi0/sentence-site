@@ -20,6 +20,7 @@ import { extractMarks, locate, markByIndex } from './predicates.ts';
 import { checkSentence } from './validate.ts';
 import { shanghaiDate, shanghaiClock } from './time.ts';
 import { LEVELS, planLevels } from './practice.ts';
+import { metered } from './tokens.ts';
 
 /** 模型回复里的任意对象 */
 type Loose = Record<string, unknown> | null | undefined;
@@ -174,7 +175,7 @@ export function createAi({
     if (!sentence) throw new HttpError(404, '句子不存在');
     let res: Review | undefined;
     try {
-      [res] = await reviewMarks(await llmFor(account), [sentence]);
+      [res] = await reviewMarks(metered(await llmFor(account), account.id, 'review', log), [sentence]);
     } catch (e) {
       throw toHttpError(e);
     }
@@ -224,7 +225,8 @@ export function createAi({
     const sentence = await repo.getSentence(account.id, String(sentenceId || ''));
     if (!sentence) throw new HttpError(404, '句子不存在');
     await checkLimit(account, 'grades', cfg.limits.grade, '今天的批改次数用完了（{n} 次），明天再来');
-    const L = await llmFor(account);
+    // 评分和汇总的每次请求都记到这个账户的 token 用量里
+    const L = metered(await llmFor(account), account.id, 'grade', log);
 
     // 1. 评分：每次都是一个全新的请求（只有系统提示 + 这一句的批改提示词，不带任何对话记录），
     //    几次之间互相看不到，也不会串到别的句子。开着准确度提升时并行评 GRADE_RUNS 次，分数取平均，减少单次评分的偶然性。
@@ -356,7 +358,7 @@ export function createAi({
     const cached = await repo.getDict(sentence.id, word);
     if (cached) return { word, data: cached as DictEntry, cached: true };
     await checkLimit(account, 'lookups', cfg.limits.lookup, '今天的查词次数用完了（{n} 次）');
-    const L = await llmFor(account);
+    const L = metered(await llmFor(account), account.id, 'lookup', log);
 
     let result: Awaited<ReturnType<Llm['chatJson']>>;
     try {
@@ -422,7 +424,10 @@ export function createAi({
     try {
       if (source !== 'daily')
         await checkLimit(account, 'gens', cfg.limits.generate, '今天加练出题的次数用完了（{n} 次）');
-      const L = await llmFor(account);
+      // 出题和出题后的谓语复核分开记 token 用量
+      const base = await llmFor(account);
+      const L = metered(base, account.id, 'generate', log);
+      const reviewer = metered(base, account.id, 'review', log);
       const day = shanghaiDate();
       const clock = shanghaiClock();
       const now = Date.now();
@@ -459,7 +464,7 @@ export function createAi({
         if (!list.length) return list;
         let reviews: Review[];
         try {
-          reviews = await reviewMarks(L, list);
+          reviews = await reviewMarks(reviewer, list);
         } catch (e) {
           reasons.push(`谓语复核没做成：${(e as Error).message}`);
           return list;

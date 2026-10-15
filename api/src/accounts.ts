@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import type { Invite } from '@sentence-site/shared';
 import type { AppConfig } from './config.ts';
 import * as repo from './repo.ts';
+import { daysAgo } from './tokens.ts';
 import type { AccountRow, DeviceRow } from './repo.ts';
 import { HttpError, type JsonBody } from './http.ts';
 import { encrypt, decrypt } from './secret.ts';
@@ -95,7 +96,11 @@ export function deviceLabel(ua: unknown = ''): string {
 
 export function createAccounts(cfg: Pick<AppConfig, 'cookieSecret'>) {
   /** 管理页显示的样子：邀请码解密后给你看，方便再发给对方 */
-  const view = (a: AccountRow, devices: DeviceRow[] = []): Invite => ({
+  const view = (
+    a: AccountRow,
+    devices: DeviceRow[] = [],
+    used: { recent: number; total: number } = { recent: 0, total: 0 },
+  ): Invite => ({
     id: a.id,
     note: a.note,
     code: decrypt(a.codeEnc, cfg.cookieSecret) || '（解不开：改过 COOKIE_SECRET）',
@@ -103,7 +108,11 @@ export function createAccounts(cfg: Pick<AppConfig, 'cookieSecret'>) {
     lastSeenAt: a.lastSeenAt,
     deviceLimit: a.deviceLimit,
     devices: devices.map(({ id, label, ip, firstSeen, lastSeen }) => ({ id, label, ip, firstSeen, lastSeen })),
+    tokens: { last30: used.recent, total: used.total },
   });
+
+  /** 每个账户用掉的 token：近 30 天（含今天）和累计 */
+  const tokens = () => repo.tokensByAccount(daysAgo(29));
 
   /** 登录时找邀请码对应的账户 */
   const findByCode = async (input: unknown): Promise<AccountRow | null> =>
@@ -150,10 +159,12 @@ export function createAccounts(cfg: Pick<AppConfig, 'cookieSecret'>) {
 
   async function list(): Promise<Invite[]> {
     const devices = await repo.listMemberDevices();
+    const used = await tokens();
     return (await repo.listMembers()).map((a) =>
       view(
         a,
         devices.filter((d) => d.accountId === a.id),
+        used[a.id],
       ),
     );
   }
@@ -178,6 +189,7 @@ export function createAccounts(cfg: Pick<AppConfig, 'cookieSecret'>) {
     return view(
       acc,
       (await repo.listMemberDevices()).filter((d) => d.accountId === id),
+      (await tokens())[id],
     );
   }
 

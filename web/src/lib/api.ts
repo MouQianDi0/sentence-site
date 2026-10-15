@@ -12,6 +12,7 @@ import type {
   RecordPatch,
   Sentence,
   Session,
+  TokenStats,
   Usage,
 } from '@sentence-site/shared';
 
@@ -103,6 +104,8 @@ export const api = {
     request<{ attempt: Attempt }>('POST', '/api/grade', { sentenceId, text }),
   lookup: (sentenceId: string, word: string) => request<LookupResult>('POST', '/api/lookup', { sentenceId, word }),
   usage: () => request<Usage>('GET', '/api/usage'),
+  /** 自己的 token 用量；days：图表和分类统计看最近几天（7、30、90） */
+  tokenStats: (days: number) => request<TokenStats>('GET', `/api/usage/tokens?days=${days}`),
 
   // 模型设置
   llmSettings: () => request<LlmSettingsView>('GET', '/api/settings/llm'),

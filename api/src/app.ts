@@ -18,6 +18,7 @@ import {
   type SettingsService,
 } from './settings.ts';
 import { createPractice, MAX_DAILY } from './practice.ts';
+import { metered, tokenStats } from './tokens.ts';
 import { createAccounts, memberVersion, newDeviceId, isDeviceId } from './accounts.ts';
 import { shanghaiDate } from './time.ts';
 
@@ -244,6 +245,11 @@ export function createApp(
     };
   });
 
+  // 当前账户自己的 token 用量（设置 → Token 用量）。?days=7|30|90：图表和分类统计的范围
+  router.add('GET', '/api/usage/tokens', async ({ url, account }) => ({
+    body: await tokenStats(account.id, url.searchParams.get('days')),
+  }));
+
   // ---- 每日任务设置（每个账户自己的）---------------------------------------------
   router.add('GET', '/api/settings/practice', async ({ account }) => ({ body: practiceSvc.get(account) }));
   router.add('PUT', '/api/settings/practice', async ({ req, account }) => ({
@@ -309,7 +315,8 @@ export function createApp(
     if (!c.baseUrl) throw new HttpError(400, '请填写接口地址');
     if (!c.apiKey) throw new HttpError(400, svc.keyError(c));
     if (!c.mainModel) throw new HttpError(400, '请填写主力模型');
-    const probe = createLlm({ llm: c });
+    // 测试连接也会用掉一点 token，同样记到这个账户名下
+    const probe = metered(createLlm({ llm: c }), account.id, 'test', log);
     const results: LlmTestItem[] = [];
     for (const model of [...new Set([c.mainModel, c.lightModel])]) {
       const started = Date.now();

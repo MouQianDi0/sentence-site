@@ -10,6 +10,9 @@ export class LlmError extends Error {
   code: LlmErrorCode;
   detail: string;
   why?: NotJsonWhy;
+  /** 模型回复了、但格式不对时，这次请求照样用掉的 token（统计用量用） */
+  usage?: ChatJsonResult['usage'];
+  model?: string;
   constructor(code: LlmErrorCode, message: string, detail = '') {
     super(message);
     this.code = code;
@@ -171,6 +174,8 @@ export function createLlm(cfg: { llm: LlmConfig }, fetchImpl: FetchLike = global
       }[why];
       const err = new LlmError('invalid_json', msg, String(text).slice(0, 500));
       err.why = why;
+      err.usage = { input: data?.usage?.prompt_tokens ?? null, output: data?.usage?.completion_tokens ?? null };
+      err.model = data?.model || model;
       throw err;
     }
     return {
