@@ -209,9 +209,9 @@ export type ValidDays = 30 | 90 | 180 | 360;
  * GET /api/session。notice：没登录的原因（比如邀请码过期了），登录页上显示。
  * expiresAt：邀请账户的到期时间（永久或你自己是 null）
  */
-export type Session =
-  | { unlocked: false; notice?: string }
-  | { unlocked: true; role: AccountRole; name: string; expiresAt?: string | null };
+type SignedOut = { unlocked: false; notice?: string };
+type SignedIn = { unlocked: true; role: AccountRole; name: string; expiresAt?: string | null };
+export type Session = SignedOut | SignedIn;
 
 export interface Device {
   id: string;
