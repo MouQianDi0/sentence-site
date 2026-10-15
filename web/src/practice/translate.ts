@@ -124,7 +124,11 @@ export function step3HTML(): string {
   const left = usage ? Math.max(0, usage.limits.grade - usage.grades) : null;
   let area = '';
   if (state.grading) {
-    area = `<div class="flex flex-col gap-2 ${C.card} p-3.5"><div class="flex items-center justify-between gap-2"><span class="inline-flex items-center gap-2"><span class="${C.spin}"></span>AI 老师正在批改…</span></div>
+    // 开着准确度提升时后台要评 5 次再汇总，告诉一声会慢一点
+    const boost = state.practiceCfg.accuracyBoost
+      ? '<span class="text-[12.5px] text-muted">准确度提升已开启，会多花一点时间</span>'
+      : '';
+    area = `<div class="flex flex-col gap-2 ${C.card} p-3.5"><div class="flex flex-wrap items-center justify-between gap-2"><span class="inline-flex items-center gap-2"><span class="${C.spin}"></span>AI 老师正在批改…</span>${boost}</div>
       <div class="${C.shim}"></div><div class="${C.shim} w-[80%]"></div><div class="${C.shim} w-[55%]"></div></div>`;
   } else if (state.gradeErr)
     area = `<div class="rounded-xl bg-bad-soft px-3.5 py-2.5 text-[14px]">${esc(state.gradeErr)}</div>`;

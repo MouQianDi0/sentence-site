@@ -222,7 +222,9 @@ export function createApp(
 
   router.add('POST', '/api/grade', async ({ req, account }) => {
     const body = await readJson(req);
-    return { body: { attempt: await ai.grade(account, body.sentenceId, body.text) } };
+    // 设置里开了“准确度提升”：后台独立评分 5 次取平均，再汇总批注；没开只评 1 次
+    const boost = practiceSvc.get(account).accuracyBoost;
+    return { body: { attempt: await ai.grade(account, body.sentenceId, body.text, { boost }) } };
   });
 
   router.add('POST', '/api/lookup', async ({ req, account }) => {

@@ -1,5 +1,6 @@
 // “设置”页里的“每日任务”卡片：出四级还是六级（可以都选，混合随机）、每天几句（1–10）、
-// 每天几点自动生成（北京时间，也可以关掉）。改了自动保存。
+// 每天几点自动生成（北京时间，也可以关掉）；以及“AI 批改”卡片的“准确度提升”开关。
+// 两张卡片的设置存在一起（/api/settings/practice），改了自动保存。
 import type { AccountRole, Level, PracticeSettings } from '@sentence-site/shared';
 import { api } from '../lib/api.ts';
 import { closest } from '../lib/dom.ts';
@@ -33,14 +34,24 @@ const C = {
   step: 'flex h-10 w-10 cursor-pointer items-center justify-center text-[20px] leading-none transition-colors hover:text-accent disabled:cursor-not-allowed disabled:opacity-35',
 };
 
-/** role()：当前账户是 owner 还是 member（邀请账户的提示多一句） */
+/** 开关的样子，和模型设置里的开关一样 */
+const switchHTML = (act: string, on: boolean, label: string, disabled = false) =>
+  `<button type="button" role="switch" aria-checked="${on}" data-act="${act}" ${disabled ? 'disabled' : ''} class="group flex w-max cursor-pointer items-center gap-2.5 text-[14px] font-semibold select-none disabled:cursor-not-allowed disabled:opacity-50">
+    <span class="relative h-[23px] w-10 flex-none rounded-full bg-line transition-colors group-aria-checked:bg-accent"><span class="absolute top-[3px] left-[3px] h-[17px] w-[17px] rounded-full bg-sheet transition-transform group-aria-checked:translate-x-[17px]"></span></span>${label}</button>`;
+
+/**
+ * root：“每日任务”卡片；gradeRoot：“AI 批改”卡片（准确度提升开关）。
+ * role()：当前账户是 owner 还是 member（邀请账户的提示多一句）
+ */
 export function createTaskSettings({
   root,
+  gradeRoot,
   toast,
   onChange,
   role = () => 'owner',
 }: {
   root: HTMLElement;
+  gradeRoot?: HTMLElement;
   toast?: Toast;
   onChange?: (cfg: PracticeSettings) => void;
   role?: () => AccountRole | undefined;
@@ -49,6 +60,7 @@ export function createTaskSettings({
   let err = '';
   let saveTimer: ReturnType<typeof setTimeout> | undefined;
   let status = ''; // saving | saved | 错误信息
+  let statusOf: 'task' | 'grade' = 'task'; // 保存状态显示在哪张卡片上（改的是哪张就显示在哪张）
 
   /** 读取设置；返回数据有没有变化（设置页据此决定要不要重新画） */
   async function load(): Promise<boolean> {
@@ -68,9 +80,13 @@ export function createTaskSettings({
   }
 
   /** 正在保存、或者正在改时间：后台刷新时先别重画，免得打断 */
-  const editing = () => status === 'saving' || root.contains(document.activeElement);
+  const editing = () =>
+    status === 'saving' ||
+    root.contains(document.activeElement) ||
+    Boolean(gradeRoot?.contains(document.activeElement));
 
-  function statusHTML(): string {
+  function statusHTML(card: 'task' | 'grade' = 'task'): string {
+    if (card !== statusOf) return '';
     if (status === 'saving') return '<span class="text-muted">保存中…</span>';
     if (status === 'saved') return '<span class="text-ok">已保存</span>';
     return status ? `<span class="text-bad">${esc(status)}</span>` : '';
@@ -110,8 +126,7 @@ export function createTaskSettings({
     const server = cfg.serverDaily !== false;
     const on = server && cfg.autoDaily;
     return `<div class="flex flex-col gap-2 border-t border-line pt-3.5">
-      <button type="button" role="switch" aria-checked="${on}" data-act="auto" ${server ? '' : 'disabled'} class="group flex w-max cursor-pointer items-center gap-2.5 text-[14px] font-semibold select-none disabled:cursor-not-allowed disabled:opacity-50">
-        <span class="relative h-[23px] w-10 flex-none rounded-full bg-line transition-colors group-aria-checked:bg-accent"><span class="absolute top-[3px] left-[3px] h-[17px] w-[17px] rounded-full bg-sheet transition-transform group-aria-checked:translate-x-[17px]"></span></span>每天自动生成</button>
+      ${switchHTML('auto', on, '每天自动生成', !server)}
       <div class="flex flex-wrap items-center gap-1.5 text-[14px] ${on ? '' : 'opacity-50'}">
         <label for="taskHour" class="mr-1">生成时间</label>
         ${timeHTML(on)}
@@ -121,7 +136,33 @@ export function createTaskSettings({
     </div>`;
   }
 
+  /** “AI 批改”卡片：准确度提升开关，和开了之后多花 token 的说明 */
+  function gradeHTML(): string {
+    if (!cfg) return '';
+    const on = cfg.accuracyBoost;
+    return `<section class="${C.card} flex flex-col gap-3 px-4 pt-3.5 pb-4" aria-label="AI 批改">
+      <div class="flex items-center gap-2"><span class="${C.label}">AI 批改</span><span id="gradeSaveState" class="ml-auto text-[12.5px]">${statusHTML('grade')}</span></div>
+      ${switchHTML('boost', on, '准确度提升')}
+      <span class="text-[13.5px] leading-[1.7]">${
+        on
+          ? '已开启：每次批改，后台会让模型独立评分 5 次、取平均分，再把这 5 次的意见汇总成一份批注给你看。'
+          : '已关闭：每次批改只让模型评分 1 次。开启后会独立评分 5 次取平均分，再汇总成一份批注，减少单次评分的偶然性。'
+      }</span>
+      <div class="flex gap-2 rounded-xl bg-mid-soft px-3 py-2.5 text-[12.5px] leading-[1.7]">
+        <svg class="mt-[3px] h-3.5 w-3.5 flex-none text-mid" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M8 1.8L15 14H1L8 1.8z"/><path d="M8 6.5v3.2M8 11.8v.1"/></svg>
+        <span>开启此开关后会增大模型的 token 消耗量：每次批改要调用 6 次模型，用量约为关闭时的 6 倍，批改也会慢一些；但评分和批注会更准确。每天的批改次数仍按 1 次计算。</span>
+      </div>
+    </section>`;
+  }
+
+  function renderGrade(enter = false): void {
+    if (!gradeRoot) return;
+    gradeRoot.innerHTML = err ? '' : gradeHTML();
+    if (enter) A.enter(gradeRoot.children);
+  }
+
   function render(enter = false): void {
+    renderGrade(enter);
     if (err) {
       root.innerHTML = `<div class="rounded-xl bg-bad-soft px-3.5 py-3 text-[14px]">读取每日任务设置失败：${esc(err)}</div>`;
       return;
@@ -159,13 +200,16 @@ export function createTaskSettings({
   function setStatus(st: string): void {
     status = st;
     const el = root.querySelector('#taskSaveState');
-    if (el) el.innerHTML = statusHTML();
+    if (el) el.innerHTML = statusHTML('task');
+    const g = gradeRoot?.querySelector('#gradeSaveState');
+    if (g) g.innerHTML = statusHTML('grade');
   }
 
   // 连续点加减号时只保存最后一次。rerender=false：只改提示，不重画整张卡片（改时间时不打断时间选择器）
   function save(patch: Partial<PracticeSettings>, { rerender = true } = {}): void {
     if (!cfg) return;
     cfg = { ...cfg, ...patch };
+    statusOf = 'accuracyBoost' in patch ? 'grade' : 'task';
     if (rerender) render();
     else {
       const hint = root.querySelector('#taskAutoHint');
@@ -176,8 +220,8 @@ export function createTaskSettings({
     saveTimer = setTimeout(async () => {
       if (!cfg) return;
       try {
-        const { levels, dailyCount, autoDaily, dailyAt } = cfg;
-        cfg = await api.savePracticeSettings({ levels, dailyCount, autoDaily, dailyAt });
+        const { levels, dailyCount, autoDaily, dailyAt, accuracyBoost } = cfg;
+        cfg = await api.savePracticeSettings({ levels, dailyCount, autoDaily, dailyAt, accuracyBoost });
         setStatus('saved');
         onChange?.(cfg);
       } catch (e) {
@@ -216,6 +260,14 @@ export function createTaskSettings({
     if (a.dataset.act === 'countMinus' && c.dailyCount > 1) save({ dailyCount: c.dailyCount - 1 });
     if (a.dataset.act === 'countPlus' && c.dailyCount < c.maxDaily) save({ dailyCount: c.dailyCount + 1 });
     A.pop(root.querySelector('#taskCount'));
+  });
+
+  gradeRoot?.addEventListener('click', (e) => {
+    const c = cfg;
+    if (!c || !closest(e, '[data-act="boost"]')) return;
+    const on = !c.accuracyBoost;
+    save({ accuracyBoost: on });
+    toast?.(on ? '准确度提升已开启：批改更准，token 用量约为原来的 6 倍' : '准确度提升已关闭：每次批改只评分 1 次');
   });
 
   // 选好时或分就保存（不重画卡片，免得打断正在选的下拉框）

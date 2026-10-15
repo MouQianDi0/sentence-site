@@ -202,47 +202,46 @@ test('批改历史：导入的旧批改按时间倒序返回', async () => {
   assert.ok(one[0].feedback && one[0].feedback.level, '最近一次点评一起导入');
 });
 
-test('AI 批改：分数夹到范围内，总分后端计算，汇总批注里找不到的问题片段被丢掉', async () => {
+test('AI 批改：默认只调用 1 次模型；分数夹到范围内，总分后端计算，找不到的问题片段被丢掉', async () => {
   const text = '尽管远程工作很灵活，许多员工错过了办公室的谈话。';
-  const issues = [
-    { src: '错过了', type: '误译', why: 'miss 这里是怀念', fix: '怀念' },
-    { src: '根本不存在的片段', type: '用词', why: 'x', fix: 'y' },
-  ];
-  const better = '尽管远程工作很灵活，许多员工怀念办公室里的闲聊。';
-  gradeReply = { acc: 55, flu: 20, comp: 30, total: 999, level: '基本准确', good: ['结构理解正确'], issues, better };
-  summaryReplyGetter = () => ({ level: '基本准确，个别词误译', good: ['结构理解正确'], issues, better });
+  gradeReply = {
+    acc: 55,
+    flu: 20,
+    comp: 30,
+    total: 999,
+    level: '基本准确',
+    good: ['结构理解正确'],
+    issues: [
+      { src: '错过了', type: '误译', why: 'miss 这里是怀念', fix: '怀念' },
+      { src: '根本不存在的片段', type: '用词', why: 'x', fix: 'y' },
+    ],
+    better: '尽管远程工作很灵活，许多员工怀念办公室里的闲聊。',
+  };
   const before = llmServer.calls.length;
   const r = await app.api('POST', '/api/grade', { sentenceId: 's-20261013-02', text });
-  summaryReplyGetter = defaultSummary;
   assert.equal(r.status, 200, JSON.stringify(r.body));
   const a = r.body.attempt;
   assert.equal(a.acc, 40);
   assert.equal(a.total, 90);
-  assert.equal(a.feedback.level, '基本准确，个别词误译', '显示的是汇总后的批注');
+  assert.equal(a.feedback.level, '基本准确');
   assert.equal(a.feedback.issues.length, 1);
+  assert.equal(a.feedback.runs, undefined, '没开准确度提升时不记每次的分数');
   assert.equal(a.model, 'fake-main');
-  assert.equal(a.inputTokens, 700 * 6, '6 次请求的用量加起来');
-
-  const calls = llmServer.calls.slice(before);
-  assert.equal(calls.length, 6, '5 次评分 + 1 次汇总');
-  for (const call of calls) {
-    assert.equal(call.auth, 'Bearer test-key');
-    assert.equal(call.path, '/v1/chat/completions');
-    assert.deepEqual(call.data.response_format, { type: 'json_object' });
-    // 每次都是单独的新对话：只有系统提示和这一次的提示词，不带别的对话记录
-    assert.deepEqual(
-      call.data.messages.map((m: { role: string }) => m.role),
-      ['system', 'user'],
-    );
-  }
-  const grades = calls.filter((c) => !c.prompt?.includes('汇总多份独立批改'));
-  assert.equal(grades.length, 5);
-  assert.ok(grades.every((c) => c.prompt === grades[0]?.prompt && c.prompt?.includes(text)));
-  const summary = calls.at(-1)?.prompt ?? '';
-  assert.ok(summary.includes('汇总多份独立批改'), '最后一次是汇总');
-  assert.ok(summary.includes('准确 40，通顺 20，完整 30，总分 90'));
+  assert.equal(a.inputTokens, 700);
+  assert.equal(llmServer.calls.length - before, 1, '没开准确度提升：只调用 1 次，不汇总');
+  const call = llmServer.calls.at(-1);
+  assert.ok(call);
+  assert.equal(call.auth, 'Bearer test-key');
+  assert.equal(call.path, '/v1/chat/completions');
+  assert.deepEqual(call.data.response_format, { type: 'json_object' });
+  assert.deepEqual(
+    call.data.messages.map((m: { role: string }) => m.role),
+    ['system', 'user'],
+    '单独的新对话，不带别的对话记录',
+  );
+  assert.ok(call.prompt?.includes(text));
   const usage = (await app.api('GET', '/api/usage')).body;
-  assert.equal(usage.grades, 1, '后台评分几次都只算一次批改');
+  assert.equal(usage.grades, 1);
   assert.equal(usage.aiReady, true);
 });
 
@@ -257,7 +256,70 @@ test('AI 批改：输入检查和每日上限', async () => {
   assert.match(over.body.error, /3 次/);
 });
 
-test('AI 批改：某次评分不是 JSON 或缺分数时，这一次自动重试', async () => {
+test('AI 批改：模型返回非 JSON 或缺分数时自动重试一次', async () => {
+  await db.raw('DELETE FROM ai_usage');
+  const replies = ['抱歉我不太明白', { acc: 35, flu: 25, comp: 28, issues: [], good: [], level: '很好', better: '' }];
+  let n = 0;
+  gradeReplyGetter = () => replies[n++];
+  let before = llmServer.calls.length;
+  let r = await app.api('POST', '/api/grade', { sentenceId: 's-20261013-03', text: '一段译文' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.attempt.total, 88);
+  assert.equal(llmServer.calls.length - before, 2);
+
+  // 两次都没给分数：报错，不算批改次数
+  gradeReplyGetter = () => ({ level: '没给分数' });
+  before = llmServer.calls.length;
+  r = await app.api('POST', '/api/grade', { sentenceId: 's-20261013-03', text: '一段译文' });
+  gradeReplyGetter = () => gradeReply;
+  assert.equal(r.status, 502);
+  assert.equal(llmServer.calls.length - before, 2);
+  assert.equal((await app.api('GET', '/api/usage')).body.grades, 1);
+});
+
+test('准确度提升：打开后后台 5 次独立评分 + 1 次汇总，每次都是单独的新对话', async () => {
+  await db.raw('DELETE FROM ai_usage');
+  const on = await app.api('PUT', '/api/settings/practice', { accuracyBoost: true });
+  assert.equal(on.body.accuracyBoost, true);
+  const text = '尽管远程工作很灵活，许多员工错过了办公室的谈话。';
+  const issues = [
+    { src: '错过了', type: '误译', why: 'miss 这里是怀念', fix: '怀念' },
+    { src: '根本不存在的片段', type: '用词', why: 'x', fix: 'y' },
+  ];
+  const better = '尽管远程工作很灵活，许多员工怀念办公室里的闲聊。';
+  gradeReply = { acc: 36, flu: 20, comp: 30, level: '基本准确', good: ['结构理解正确'], issues, better };
+  summaryReplyGetter = () => ({ level: '基本准确，个别词误译', good: ['结构理解正确'], issues, better });
+  const before = llmServer.calls.length;
+  const r = await app.api('POST', '/api/grade', { sentenceId: 's-20261013-02', text });
+  summaryReplyGetter = defaultSummary;
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  const a = r.body.attempt;
+  assert.equal(a.total, 86);
+  assert.equal(a.feedback.level, '基本准确，个别词误译', '显示的是汇总后的批注');
+  assert.equal(a.feedback.issues.length, 1, '汇总批注里找不到的问题片段也会被丢掉');
+  assert.equal(a.feedback.runs.length, 5);
+  assert.equal(a.inputTokens, 700 * 6, '6 次请求的用量加起来');
+
+  const calls = llmServer.calls.slice(before);
+  assert.equal(calls.length, 6, '5 次评分 + 1 次汇总');
+  for (const call of calls) {
+    assert.equal(call.auth, 'Bearer test-key');
+    // 每次都是单独的新对话：只有系统提示和这一次的提示词，不带别的对话记录
+    assert.deepEqual(
+      call.data.messages.map((m: { role: string }) => m.role),
+      ['system', 'user'],
+    );
+  }
+  const grades = calls.filter((c) => !c.prompt?.includes('汇总多份独立批改'));
+  assert.equal(grades.length, 5);
+  assert.ok(grades.every((c) => c.prompt === grades[0]?.prompt && c.prompt?.includes(text)));
+  const summary = calls.at(-1)?.prompt ?? '';
+  assert.ok(summary.includes('汇总多份独立批改'), '最后一次是汇总');
+  assert.ok(summary.includes('准确 36，通顺 20，完整 30，总分 86'));
+  assert.equal((await app.api('GET', '/api/usage')).body.grades, 1, '后台评分几次都只算一次批改');
+});
+
+test('准确度提升：某次评分不是 JSON 或缺分数时，这一次自动重试', async () => {
   await db.raw('DELETE FROM ai_usage');
   const bad: unknown[] = ['抱歉我不太明白', { level: '没给分数' }];
   let n = 0;
@@ -271,7 +333,7 @@ test('AI 批改：某次评分不是 JSON 或缺分数时，这一次自动重�
   assert.equal(llmServer.calls.length - before, 8, '5 次评分 + 2 次重试 + 1 次汇总');
 });
 
-test('AI 批改：后台 5 次独立评分取平均，汇总批注能看到每一次的结果', async () => {
+test('准确度提升：5 次独立评分取平均，汇总批注能看到每一次的结果', async () => {
   await db.raw('DELETE FROM ai_usage');
   const scores = [
     [30, 20, 25],
@@ -308,7 +370,7 @@ test('AI 批改：后台 5 次独立评分取平均，汇总批注能看到每�
   assert.equal(saved.feedback.runs.length, 5);
 });
 
-test('AI 批改：汇总没做成时，用总分最接近平均分的那一次批注', async () => {
+test('准确度提升：汇总没做成时，用总分最接近平均分的那一次批注', async () => {
   await db.raw('DELETE FROM ai_usage');
   const scores = [
     [20, 10, 10],
@@ -333,7 +395,7 @@ test('AI 批改：汇总没做成时，用总分最接近平均分的那一次�
   assert.equal(llmServer.calls.length - before, 7, '汇总出错时重试一次');
 });
 
-test('AI 批改：有几次评分失败时，按成功的几次取平均', async () => {
+test('准确度提升：有几次评分失败时，按成功的几次取平均', async () => {
   await db.raw('DELETE FROM ai_usage');
   let n = 0;
   gradeReplyGetter = () =>
@@ -347,7 +409,7 @@ test('AI 批改：有几次评分失败时，按成功的几次取平均', async
   assert.equal(r.body.attempt.feedback.runs.length, 3);
 });
 
-test('AI 批改：几次评分全部失败时报错，不算批改次数', async () => {
+test('准确度提升：几次评分全部失败时报错，不算批改次数', async () => {
   await db.raw('DELETE FROM ai_usage');
   gradeReplyGetter = () => ({ status: 401, body: { error: { message: 'nope' } } });
   const r = await app.api('POST', '/api/grade', { sentenceId: 's-20261013-03', text: '第五段译文' });
@@ -355,6 +417,18 @@ test('AI 批改：几次评分全部失败时报错，不算批改次数', async
   assert.equal(r.status, 502);
   assert.match(r.body.error, /API 密钥/);
   assert.equal((await app.api('GET', '/api/usage')).body.grades, 0);
+});
+
+test('准确度提升：关掉后又只调用 1 次模型', async () => {
+  await db.raw('DELETE FROM ai_usage');
+  const off = await app.api('PUT', '/api/settings/practice', { accuracyBoost: false });
+  assert.equal(off.body.accuracyBoost, false);
+  gradeReply = { acc: 30, flu: 20, comp: 20, issues: [], good: [], level: 'ok', better: '' };
+  const before = llmServer.calls.length;
+  const r = await app.api('POST', '/api/grade', { sentenceId: 's-20261013-03', text: '第六段译文' });
+  assert.equal(r.status, 200, JSON.stringify(r.body));
+  assert.equal(r.body.attempt.total, 70);
+  assert.equal(llmServer.calls.length - before, 1);
 });
 
 test('查词：第一次调用模型并缓存，第二次直接读缓存', async () => {
@@ -462,7 +536,7 @@ test('难度分配：只选一种全是它，两种都选各占一半', () => {
 });
 
 test('每日任务设置：默认值、校验、保存后重启还在', async () => {
-  const base = { maxDaily: 10, serverDaily: true };
+  const base = { maxDaily: 10, serverDaily: true, accuracyBoost: false };
   let r = await app.api('GET', '/api/settings/practice');
   assert.deepEqual(r.body, { levels: ['CET-4'], dailyCount: 5, autoDaily: true, dailyAt: '07:50', ...base });
   const bads = [
@@ -475,6 +549,7 @@ test('每日任务设置：默认值、校验、保存后重启还在', async ()
     { dailyAt: '7:5' },
     { dailyAt: 750 },
     { autoDaily: 'no' },
+    { accuracyBoost: 'yes' },
   ];
   for (const bad of bads) {
     assert.equal((await app.api('PUT', '/api/settings/practice', bad)).status, 400, JSON.stringify(bad));
@@ -486,9 +561,21 @@ test('每日任务设置：默认值、校验、保存后重启还在', async ()
   assert.equal(r.body.dailyAt, '07:05');
   r = await app.api('PUT', '/api/settings/practice', { autoDaily: false });
   assert.deepEqual(r.body, { levels: ['CET-4', 'CET-6'], dailyCount: 7, autoDaily: false, dailyAt: '07:05', ...base });
+  // 准确度提升：只改这一项，其它不变
+  r = await app.api('PUT', '/api/settings/practice', { accuracyBoost: true });
+  assert.deepEqual(r.body, {
+    levels: ['CET-4', 'CET-6'],
+    dailyCount: 7,
+    autoDaily: false,
+    dailyAt: '07:05',
+    ...base,
+    accuracyBoost: true,
+  });
   const p2 = createPractice(cfg);
   assert.equal(p2.get(await repo.getAccount('owner')).dailyCount, 7);
   assert.equal(p2.get(await repo.getAccount('owner')).dailyAt, '07:05');
+  assert.equal(p2.get(await repo.getAccount('owner')).accuracyBoost, true);
+  await app.api('PUT', '/api/settings/practice', { accuracyBoost: false });
   // .env 关掉每日出题时告诉页面
   assert.equal(createPractice(loadConfig({ DAILY_GENERATE: '0' })).get({}).serverDaily, false);
   await app.api('PUT', '/api/settings/practice', { autoDaily: true, dailyAt: '07:50' });

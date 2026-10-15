@@ -93,6 +93,7 @@ export const state = {
     dailyAt: '07:50',
     autoDaily: true,
     serverDaily: true,
+    accuracyBoost: false,
   } as PracticeSettings,
   /** 今日任务全部完成时，练习页显示完成页（点开某一句复习时关掉） */
   showDone: false,

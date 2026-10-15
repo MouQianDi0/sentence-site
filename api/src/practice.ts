@@ -1,5 +1,6 @@
 // 练习设置：每天的任务出几句（1–10）、出四级还是六级（可以都选，混合随机）、
-// 每天几点自动生成（北京时间，也可以关掉自动生成）。每个账户各存一份（accounts.practice）。
+// 每天几点自动生成（北京时间，也可以关掉自动生成），以及 AI 批改的“准确度提升”开关。
+// 每个账户各存一份（accounts.practice）。
 import type { Level, PracticeSettings } from '@sentence-site/shared';
 import type { AppConfig } from './config.ts';
 import * as repo from './repo.ts';
@@ -14,6 +15,7 @@ export interface StoredPractice {
   dailyCount: number;
   autoDaily: boolean;
   dailyAt: string;
+  accuracyBoost: boolean;
 }
 
 const clampCount = (n: unknown, d: number): number => {
@@ -44,6 +46,8 @@ export function createPractice(cfg: Pick<AppConfig, 'daily'>) {
     autoDaily: true,
     // .env 里的时间只是默认值，每个账户可以在“设置”里改成自己的
     dailyAt: normalizeTime(`${cfg.daily?.hour ?? 7}:${pad(cfg.daily?.minute ?? 50)}`) || '07:50',
+    // 准确度提升默认关：开着时每次批改要调 6 次模型
+    accuracyBoost: false,
   };
 
   function normalize(input: unknown, base: StoredPractice = defaults): StoredPractice {
@@ -56,6 +60,7 @@ export function createPractice(cfg: Pick<AppConfig, 'daily'>) {
       dailyCount: 'dailyCount' in raw ? clampCount(raw.dailyCount, base.dailyCount) : base.dailyCount,
       autoDaily: typeof raw.autoDaily === 'boolean' ? raw.autoDaily : base.autoDaily,
       dailyAt: normalizeTime(raw.dailyAt) || base.dailyAt,
+      accuracyBoost: typeof raw.accuracyBoost === 'boolean' ? raw.accuracyBoost : base.accuracyBoost,
     };
   }
 
@@ -82,6 +87,8 @@ export function createPractice(cfg: Pick<AppConfig, 'daily'>) {
       throw new HttpError(400, 'autoDaily 要是 true 或 false');
     if ('dailyAt' in body && !normalizeTime(body.dailyAt))
       throw new HttpError(400, '生成时间的格式是 时:分，比如 07:50');
+    if ('accuracyBoost' in body && typeof body.accuracyBoost !== 'boolean')
+      throw new HttpError(400, 'accuracyBoost 要是 true 或 false');
     const next = normalize(body, normalize(account.practice));
     await repo.setPractice(account.id, next);
     account.practice = next;

@@ -128,7 +128,7 @@ export interface Feedback {
   good: string[];
   issues: Issue[];
   better: string;
-  /** 后台几次独立评分各自的分数（页面不显示，留着核对；旧记录没有） */
+  /** 开着“准确度提升”时，后台几次独立评分各自的分数（页面不显示，留着核对；只评 1 次时没有） */
   runs?: RunScore[];
 }
 
@@ -204,6 +204,8 @@ export interface PracticeSettings {
   autoDaily: boolean;
   /** 每天自动生成的时间，北京时间 HH:MM */
   dailyAt: string;
+  /** AI 批改的“准确度提升”：开着时后台独立评分 5 次取平均、再汇总批注；关着只评 1 次 */
+  accuracyBoost: boolean;
   maxDaily: number;
   /** 服务器 .env 有没有开每日出题 */
   serverDaily: boolean;

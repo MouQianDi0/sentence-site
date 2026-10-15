@@ -97,7 +97,7 @@ const hasScores = (input: unknown): boolean => {
   return ['acc', 'flu', 'comp'].every((k) => d?.[k] !== null && d?.[k] !== '' && Number.isFinite(Number(d?.[k])));
 };
 
-/** 每次批改在后台做几次独立评分，分数取平均 */
+/** 开着“准确度提升”时，每次批改在后台做几次独立评分，分数取平均 */
 export const GRADE_RUNS = 5;
 /** 这几种错误再试一次可能就好了 */
 const RETRYABLE: LlmErrorCode[] = ['invalid_json', 'rate_limited', 'upstream'];
@@ -120,7 +120,7 @@ type Review =
   { status: 'ok'; segs: Seg[]; changed: boolean; note: string } | { status: 'unknown' } | { status: 'mismatch' };
 
 export interface Ai {
-  grade(account: Account, sentenceId: unknown, rawText: unknown): Promise<Attempt>;
+  grade(account: Account, sentenceId: unknown, rawText: unknown, opts?: { boost?: boolean }): Promise<Attempt>;
   lookup(account: Account, sentenceId: unknown, rawWord: unknown): Promise<LookupResult>;
   generate(account: Account, opts?: { source?: SentenceSource; n?: number; levels?: Level[] }): Promise<string[]>;
   reviewOne(account: Account, id: unknown): Promise<{ sentence: Sentence | null; changed: boolean; note: string }>;
@@ -206,7 +206,18 @@ export function createAi({
     if (usage[field] >= limit) throw new HttpError(429, message.replace('{n}', String(limit)));
   }
 
-  async function grade(account: Account, sentenceId: unknown, rawText: unknown): Promise<Attempt> {
+  /**
+   * 批改一段译文。boost（设置里的“准确度提升”）：
+   * - 关（默认）：调用 1 次模型，打分和批注都用这一次的。
+   * - 开：后台并行 GRADE_RUNS 次独立评分，分数取平均，再开一次新的对话汇总成一份批注。
+   * 不管调用几次模型，每日批改次数都只算 1 次。
+   */
+  async function grade(
+    account: Account,
+    sentenceId: unknown,
+    rawText: unknown,
+    { boost = false }: { boost?: boolean } = {},
+  ): Promise<Attempt> {
     const text = String(rawText ?? '').trim();
     if (!text) throw new HttpError(400, '先写下你的译文');
     if (text.length > 500) throw new HttpError(400, '译文太长了（最多 500 字）');
@@ -215,16 +226,19 @@ export function createAi({
     await checkLimit(account, 'grades', cfg.limits.grade, '今天的批改次数用完了（{n} 次），明天再来');
     const L = await llmFor(account);
 
-    // 1. 后台并行做 GRADE_RUNS 次独立评分。每次都是一个全新的请求（只有系统提示 + 这一句的批改提示词，
-    //    不带任何对话记录），几次之间互相看不到，也不会串到别的句子，分数取平均，减少单次评分的偶然性。
+    // 1. 评分：每次都是一个全新的请求（只有系统提示 + 这一句的批改提示词，不带任何对话记录），
+    //    几次之间互相看不到，也不会串到别的句子。开着准确度提升时并行评 GRADE_RUNS 次，分数取平均，减少单次评分的偶然性。
+    const n = boost ? GRADE_RUNS : 1;
     const prompt = gradePrompt(sentence, text);
-    const settled = await Promise.allSettled(Array.from({ length: GRADE_RUNS }, () => gradeOnce(L, prompt, text)));
+    // 只评 1 次时温度低一点，结果稳定；评几次取平均时稍高一点，几次之间才有独立的判断
+    const temperature = boost ? 0.5 : 0.3;
+    const settled = await Promise.allSettled(Array.from({ length: n }, () => gradeOnce(L, prompt, text, temperature)));
     const runs = settled.flatMap((s) => (s.status === 'fulfilled' ? [s.value] : []));
     const failed = settled.flatMap((s) => (s.status === 'rejected' ? [s.reason as unknown] : []));
     if (!runs.length) throw toHttpError(failed[0]);
     if (failed.length) {
       const why = failed.map((e) => (e as Error).message).join('；');
-      log.warn?.(`[ai] ${GRADE_RUNS} 次评分有 ${failed.length} 次没成功，按 ${runs.length} 次取平均：${why}`);
+      log.warn?.(`[ai] ${n} 次评分有 ${failed.length} 次没成功，按 ${runs.length} 次取平均：${why}`);
     }
     const mean = (k: 'acc' | 'flu' | 'comp') => Math.round(runs.reduce((s, r) => s + r.fb[k], 0) / runs.length);
     const acc = mean('acc');
@@ -232,8 +246,8 @@ export function createAi({
     const comp = mean('comp');
     const total = acc + flu + comp;
 
-    // 2. 再开一次新的对话，把几次评分交给它汇总成一份批注（只写文字，分数用上面的平均分）。
-    //    汇总没做成时，用总分最接近平均分的那一次的批注。
+    // 2. 评了不止一次时，再开一次新的对话，把几次评分交给它汇总成一份批注（只写文字，分数用上面的平均分）。
+    //    汇总没做成时，用总分最接近平均分的那一次的批注。只评了 1 次就直接用这一次的批注。
     let note: Feedback = runs[0]?.fb ?? { level: '', good: [], issues: [], better: '' };
     let summary: ChatJsonResult | null = null;
     if (runs.length > 1) {
@@ -259,7 +273,7 @@ export function createAi({
         good: note.good,
         issues: note.issues,
         better: note.better,
-        runs: runs.map((r) => ({ acc: r.fb.acc, flu: r.fb.flu, comp: r.fb.comp })),
+        ...(boost ? { runs: runs.map((r) => ({ acc: r.fb.acc, flu: r.fb.flu, comp: r.fb.comp })) } : {}),
       },
       model: (summary ?? runs[0]?.result)?.model ?? null,
       inputTokens: sumTokens(calls.map((c) => c.usage.input)),
@@ -277,11 +291,12 @@ export function createAi({
     L: Llm,
     prompt: string,
     text: string,
+    temperature: number,
   ): Promise<{ fb: CleanFeedback; result: ChatJsonResult }> {
     let lastError: unknown;
     for (let i = 0; i < 2; i++) {
       try {
-        const result = await L.chatJson({ prompt, model: L.models().main, maxTokens: 1500, temperature: 0.5 });
+        const result = await L.chatJson({ prompt, model: L.models().main, maxTokens: 1500, temperature });
         if (!hasScores(result.data)) throw new LlmError('invalid_json', 'AI 评分时没给出分数');
         return { fb: cleanFeedback(result.data, text), result };
       } catch (e) {

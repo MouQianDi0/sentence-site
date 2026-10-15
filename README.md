@@ -120,7 +120,7 @@ sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 htt
 3. 点“获取模型列表”选模型（平台不提供列表时手动填写）
 4. 点“测试连接”，成功后点“保存”，立即生效，不用重启
 
-AI 批改在后台做 5 次独立评分（分数取平均，减少单次评分的偶然性），再用一次新的对话把这几次汇总成一份批注，所以一次批改会调用 6 次主力模型，比原来慢一点、用量约是原来的 6 倍；每日批改次数仍按 1 次算。
+设置页的“AI 批改”里有个“准确度提升”开关（每个账户自己的，默认关）。关着时每次批改只调用 1 次模型；打开后在后台做 5 次独立评分（分数取平均，减少单次评分的偶然性），再用一次新的对话把这几次汇总成一份批注，所以一次批改会调用 6 次主力模型，慢一点、token 用量约是关着时的 6 倍。不管开没开，每日批改次数都按 1 次算。
 
 “关闭深度思考”默认开着：DeepSeek 等新模型默认会先“思考”再回答，批改和查词用不到，开着会慢很多、也更费钱。DeepSeek 推荐主力用 `deepseek-v4-pro`、轻量用 `deepseek-flash`。
 
@@ -153,14 +153,14 @@ AI 批改在后台做 5 次独立评分（分数取平均，减少单次评分�
 | DELETE | /api/admin/invites/:id/devices/:deviceId | 只有你自己能用：移除一台设备，它马上退出登录 |
 | GET | /api/sentences?since= | 句库（带 since 只返回更新的） |
 | POST | /api/sentences/generate | `{"kind":"daily"}` 生成或补齐今日任务；`{"kind":"extra","count":3}` 加练 1–10 句 |
-| GET / PUT | /api/settings/practice | 每日任务设置：`levels`（CET-4 / CET-6，可多选）、`dailyCount`（1–10）、`autoDaily`（是否自动生成）、`dailyAt`（自动生成时间，北京时间 `HH:MM`）；读取时还返回 `serverDaily`（服务器有没有开每日出题） |
+| GET / PUT | /api/settings/practice | 每日任务设置：`levels`（CET-4 / CET-6，可多选）、`dailyCount`（1–10）、`autoDaily`（是否自动生成）、`dailyAt`（自动生成时间，北京时间 `HH:MM`）、`accuracyBoost`（AI 批改的准确度提升开关，默认 `false`）；读取时还返回 `serverDaily`（服务器有没有开每日出题） |
 | DELETE | /api/sentences/:id | 删除一句（连带它的记录） |
 | PUT | /api/sentences/:id/predicates | 修正谓语标注：`{"spans":[{"kind":"main","a":2,"b":2},{"kind":"sub","a":9,"b":10}]}`，a、b 是整句单词下标 |
 | POST | /api/sentences/:id/review | 让 AI 按出题规范复查这一句的谓语，标错了就改正并保存 |
 | GET | /api/records | 所有句子的练习状态 |
 | PUT | /api/records/:sentenceId | 保存圈谓语结果、选项、草稿（只改传入的字段） |
 | GET | /api/attempts?sentenceId= | AI 批改历史 |
-| POST | /api/grade | AI 批改：后台并行 5 次独立评分取平均分，再用一次新的对话汇总成一份批注（每次都是不带上下文的单独请求；只算 1 次批改） |
+| POST | /api/grade | AI 批改。默认调用 1 次模型；开了准确度提升时后台并行 5 次独立评分取平均分，再用一次新的对话汇总成一份批注（每次都是不带上下文的单独请求；都只算 1 次批改） |
 | POST | /api/lookup | AI 查词（结果缓存在数据库） |
 | GET | /api/usage | 今天的 AI 用量和上限 |
 | GET / PUT / DELETE | /api/settings/llm | 当前账户自己的模型配置。读取各平台配置；保存某个平台并切换过去（`provider` 字段）；`?provider=` 删除某个平台，不带参数改回 .env（密钥只返回打码后的） |

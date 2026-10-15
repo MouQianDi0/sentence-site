@@ -1,4 +1,4 @@
-// “设置”页：每日任务、邀请码入口（只有你自己）、模型设置、账户。
+// “设置”页：每日任务、邀请码入口（只有你自己）、AI 批改（准确度提升）、模型设置、账户。
 // 第一次进入时几块的数据一起读好再一起显示、只播一次进场动画；之后再进入先显示上次读到的，
 // 后台读到新数据再悄悄更新（不再播动画），所以不会一块一块地闪出来。
 // 邀请码管理是从设置页点进去的单独页面，地址是 /settings/invites，手机的返回手势能回到设置主页。
@@ -34,7 +34,7 @@ function renderInviteEntry(): void {
 
 /** 设置主页上要显示的几块（不含邀请码页） */
 function settingsCards(): HTMLElement[] {
-  return ['taskSettings', 'inviteEntry', 'llmSettings', 'accountSettings']
+  return ['taskSettings', 'inviteEntry', 'gradeSettings', 'llmSettings', 'accountSettings']
     .map((id) => $(id))
     .filter((el) => el.firstElementChild);
 }
@@ -69,7 +69,9 @@ export async function openSettings(): Promise<void> {
     renderSettingsMain(!wantInvites);
     if (wantInvites) invitesView.render(true);
   } else {
-    ['taskSettings', 'inviteEntry', 'llmSettings', 'accountSettings'].forEach((id) => ($(id).innerHTML = ''));
+    ['taskSettings', 'inviteEntry', 'gradeSettings', 'llmSettings', 'accountSettings'].forEach(
+      (id) => ($(id).innerHTML = ''),
+    );
     setLoading(true);
     if (wantInvites) invitesView.render();
   }
@@ -178,6 +180,7 @@ async function logout(btn: HTMLButtonElement): Promise<void> {
 export function initSettings(): void {
   taskSettings = createTaskSettings({
     root: $('taskSettings'),
+    gradeRoot: $('gradeSettings'),
     toast,
     role: () => state.me?.role,
     onChange: (p) => {

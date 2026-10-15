@@ -169,6 +169,14 @@ test('每个账户的句库、记录、批改、用量、每日任务设置互�
     await m.api('PUT', '/api/settings/practice', { levels: ['CET-4'], dailyCount: 2 });
     assert.equal((await owner.api('GET', '/api/settings/practice')).body.dailyCount, 4);
     assert.deepEqual((await m.api('GET', '/api/settings/practice')).body.levels, ['CET-4']);
+
+    // 准确度提升也各管各的：你开了，邀请账户还是关着，它批改只调用 1 次
+    await owner.api('PUT', '/api/settings/practice', { accuracyBoost: true });
+    assert.equal((await m.api('GET', '/api/settings/practice')).body.accuracyBoost, false);
+    const n0 = fake.calls.length;
+    assert.equal((await m.api('POST', '/api/grade', { sentenceId: mid, text: '再批一次' })).status, 200);
+    assert.equal(fake.calls.length - n0, 1);
+    await owner.api('PUT', '/api/settings/practice', { accuracyBoost: false });
   } finally {
     m.close();
   }

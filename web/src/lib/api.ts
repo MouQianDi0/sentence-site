@@ -88,10 +88,11 @@ export const api = {
   generate: (body: { kind: 'daily' } | { kind: 'extra'; count: number }) =>
     request<{ added: string[] }>('POST', '/api/sentences/generate', body),
 
-  // 每日任务设置
+  // 每日任务设置（也存着 AI 批改的“准确度提升”开关）
   practiceSettings: () => request<PracticeSettings>('GET', '/api/settings/practice'),
-  savePracticeSettings: (body: Partial<Pick<PracticeSettings, 'levels' | 'dailyCount' | 'autoDaily' | 'dailyAt'>>) =>
-    request<PracticeSettings>('PUT', '/api/settings/practice', body),
+  savePracticeSettings: (
+    body: Partial<Pick<PracticeSettings, 'levels' | 'dailyCount' | 'autoDaily' | 'dailyAt' | 'accuracyBoost'>>,
+  ) => request<PracticeSettings>('PUT', '/api/settings/practice', body),
 
   // 练习记录、批改、查词
   records: () => request<{ records: PracticeRecord[] }>('GET', '/api/records'),
