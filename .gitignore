@@ -4,3 +4,5 @@ backups/
 node_modules/
 dist/
 *.tsbuildinfo
+# 服务器自己的 Compose 补充配置（比如让 api 加入 mihomo 所在的 proxy-net 网络），不进仓库
+docker-compose.override.yml
