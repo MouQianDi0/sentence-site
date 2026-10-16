@@ -3,7 +3,7 @@
 四六级长难句练习网站：圈谓语 → 看结构（成分颜色 + 从句知识点）→ 翻译（AI 批改 + 选译文），带点词查义、朗读、学习记录和每日任务。
 
 - 前端：TypeScript + Vite 构建，Tailwind CSS v4 + GSAP 动画
-- 后端：TypeScript，Node.js 22 直接运行（Node 自带的类型擦除，不用先编译），唯一运行依赖是 `pg`；AI 走任何兼容 OpenAI 接口格式的国内大模型
+- 后端：TypeScript，Node.js 22 直接运行（Node 自带的类型擦除，不用先编译），唯一运行依赖是 `pg`；AI 走任何兼容 OpenAI 接口格式的国内大模型，你自己的账户还可以用 ChatGPT 套餐（Sign in with ChatGPT）出题改题
 - 前后端共用的接口类型、句子文本工具、知识点放在 `shared/`
 - 数据库：PostgreSQL 16
 - 部署：Docker Compose（db / api / web 三个容器，api 和 web 的镜像在服务器上构建）
@@ -133,6 +133,38 @@ sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 htt
 
 也可以继续用 `.env` 配置（写法见 `.env.example`），改完执行 `sudo docker compose up -d --force-recreate api`。注意：网页保存的密钥用 `COOKIE_SECRET` 加密，改了 `COOKIE_SECRET` 之后要在设置页重新填一次密钥。
 
+## ChatGPT 套餐（只给你自己用）
+
+你有 ChatGPT Plus 或 Pro 的话，可以在“设置”→“ChatGPT 套餐”里用 Sign in with ChatGPT 连接，之后你自己账户的出题、改题用 ChatGPT 套餐里的额度（和 Codex 共用那份额度），不用另付 API 费用。ChatGPT 用不了的时候（没连、额度用完、授权失效、网络不通）这次请求自动改用上面配的国内模型，所以国内模型最好也配着。
+
+**只有你自己的账户会用到。** OpenAI 的条款规定套餐的授权只能用于连接它的这个人自己的请求，所以邀请账户永远只用它们自己填的模型——哪怕它们没配，也不会退到你的 ChatGPT 上（有测试专门守着这一条）。
+
+**地区。** OpenAI 不支持中国大陆、香港、澳门。服务器通过 Clash 把请求发出去可以解决“连不上”，但你本人在大陆使用不在 OpenAI 的支持范围内，ChatGPT 账号有被风控的可能，风险自己掂量。
+
+### 服务器上先配好代理（只做一次）
+
+1. Clash（mihomo）的配置里：`mixed-port: 7890`（或 `port`）、`allow-lan: true`；规则模式下给 `openai.com` 和 `chatgpt.com` 指定一个 **OpenAI 支持地区** 的节点（美国、日本、新加坡等，**不能是香港**），例如 `- DOMAIN-SUFFIX,openai.com,美国节点` 和 `- DOMAIN-SUFFIX,chatgpt.com,美国节点`（节点组名换成你自己的）。
+2. **不要让外网用到这个代理**：`allow-lan` 会让 7890 监听所有网卡。确认腾讯云安全组没有放行 7890；在你自己电脑上执行 `curl -m 5 -x http://服务器公网IP:7890 https://www.example.com` 应该连不上。想再保险可以在 Clash 里设 `authentication: ["用户名:密码"]`，下面的地址写成 `http://用户名:密码@host.docker.internal:7890`。
+3. `.env` 里加一行 `OPENAI_PROXY=http://host.docker.internal:7890`，然后 `sudo docker compose up -d --force-recreate api`。容器通过 `host.docker.internal` 访问宿主机（`docker-compose.yml` 里已经配好）。只有发往 OpenAI 的请求走这个代理，国内模型照旧直连。
+4. 检查：`sudo docker compose exec api node scripts/check-openai.ts`，会显示能不能连上 OpenAI、OpenAI 看到的出口地区。全是 ✓ 再去网站上连接。
+
+### 连接（建议在电脑浏览器上做）
+
+1. “设置”→“ChatGPT 套餐”→ 点 **Continue with ChatGPT**，会在新窗口打开 ChatGPT 的授权页。
+2. 登录、选账号，**同意“使用 ChatGPT 套餐”**（不同意的话能连上但用不了）。
+3. 同意后浏览器会跳到一个打不开的 `http://127.0.0.1:47391/auth/callback?...` 页面——这是正常的（OpenAI 规定回调地址必须是 127.0.0.1，而服务器在远端）。把地址栏里的**整段地址**复制下来，粘贴回设置页，点“完成连接”。10 分钟内有效，每个授权链接只能用一次。
+4. 服务器通过代理换取授权、校验 OpenAI 的签名后加密保存，自动选第一个可用模型，之后可以换。授权一小时过期，服务器会自动续期，不用管。
+
+### 用起来
+
+- 默认改题、出题（包括出题后的谓语复核）走 ChatGPT，查词留给国内模型（频繁又简单，省 ChatGPT 的额度），都可以在卡片上改。开着“准确度提升”时一次改题会调用 6 次。
+- **每日任务定时出题默认不用 ChatGPT**：OpenAI 要求后台调用（你不在的时候）必须经过你同意，卡片上单独有个开关，打开才算同意。你手动点“生成今日任务”不受影响。
+- ChatGPT 返回“额度用完”时暂停一小时，期间直接用国内模型，到时间自动再试；卡片上可以“现在就恢复”，或者点“测试连接”，成功了也会取消暂停。Plus 套餐还有一个 5 小时的额度窗口，是所有用这份额度的地方（ChatGPT、Codex、这个网站……）共用的。每个应用每周能用多少，在 ChatGPT 的 [设置 → 用量](https://chatgpt.com/settings/usage) 里看和改（卡片上的 “Manage usage”）。
+- Token 用量页里 ChatGPT 的调用记成 `chatgpt/模型名`，和国内模型分开统计。
+- 授权失效（比如在 ChatGPT 设置里断开了这个应用）时卡片会提示“重新连接”，重新授权一次就好，会直接选原来的账号。
+- 点“断开 ChatGPT”会到 OpenAI 吊销授权、删掉服务器上的凭据（模型和开关的设置保留）。OpenAI 没确认吊销时会提示你到 ChatGPT 设置里手动断开。
+- 凭据（access / refresh / ID token）用 `COOKIE_SECRET` 加密后存在数据库的 `settings` 表里，和 API 密钥一样；改了 `COOKIE_SECRET` 要重新连接。没连过 ChatGPT 的话数据库里什么都不存。
+
 ## 出题规范（给 AI 和 agent 读的统一标准）
 
 句子数据的所有规则写在一份文件里：[`api/skills/sentence-spec/SKILL.md`](api/skills/sentence-spec/SKILL.md)（Agent Skills 格式）。谓语怎么标、片段怎么切、知识点键怎么选、主干怎么写都以它为准：
@@ -170,6 +202,12 @@ sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 htt
 | GET / PUT / DELETE | /api/settings/llm | 当前账户自己的模型配置。读取各平台配置；保存某个平台并切换过去（`provider` 字段）；`?provider=` 删除某个平台，不带参数改回 .env（密钥只返回打码后的） |
 | POST | /api/settings/llm/test | 用填写的配置测试连接（不保存） |
 | POST | /api/settings/llm/models | 获取平台的模型列表 |
+| GET / PUT / DELETE | /api/settings/chatgpt | 只有你自己能用：ChatGPT 套餐的状态；`{"mainModel","lightModel","use":{"grade","generate","lookup"},"background"}` 改设置；DELETE 断开（到 OpenAI 吊销授权，返回 `revoked`） |
+| POST | /api/settings/chatgpt/start | 只有你自己能用：生成授权链接（10 分钟内有效） |
+| POST | /api/settings/chatgpt/finish | 只有你自己能用：`{"callbackUrl":"http://127.0.0.1:47391/auth/callback?code=…"}` 完成连接 |
+| POST | /api/settings/chatgpt/models | 只有你自己能用：这个 ChatGPT 账号能用的模型 |
+| POST | /api/settings/chatgpt/test | 只有你自己能用：用主力、轻量模型各调用一次；都成功时取消暂停 |
+| POST | /api/settings/chatgpt/resume | 只有你自己能用：取消暂停（额度恢复了、升级了套餐） |
 | GET | /api/health | 健康检查 |
 
 ## 目录结构

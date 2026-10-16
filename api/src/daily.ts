@@ -4,6 +4,7 @@
 // 服务重启后如果当天已经过了设定时间还没出题，也会补上。
 import type { AppConfig } from './config.ts';
 import type { Llm } from './llm.ts';
+import type { LlmUse } from './llm-route.ts';
 import * as repo from './repo.ts';
 import type { AccountRow } from './repo.ts';
 import { shanghaiDate, shanghaiParts } from './time.ts';
@@ -14,15 +15,20 @@ type Logger = Pick<Console, 'log' | 'error'>;
 
 export interface DailyDeps {
   ai: Pick<Ai, 'generate'>;
-  llmFor: (account: AccountRow) => Promise<Pick<Llm, 'ready'>>;
+  llmFor: (account: AccountRow, use?: LlmUse) => Promise<Pick<Llm, 'ready'>>;
   practice: Pick<ReturnType<typeof createPractice>, 'get'>;
   log?: Logger;
   now?: () => Date;
 }
 
 export const ACTIVE_DAYS = 7;
+/** 定时出题：后台调用 */
+const BACKGROUND: LlmUse = { kind: 'generate', background: true };
 
-/** llmFor(account)：这个账户的 AI 客户端；没配置模型的账户跳过。now 方便测试时指定时间 */
+/**
+ * llmFor(account, use)：这个账户的 AI 客户端；没配置模型的账户跳过。now 方便测试时指定时间。
+ * 定时出题算后台调用：你自己的账户只有在设置里同意了才会用 ChatGPT 套餐，否则用国内模型。
+ */
 export function createDailyRunner({ ai, llmFor, practice, log = console, now = () => new Date() }: DailyDeps) {
   let running = false;
   const done = new Map<string, string>(); // 账户 id -> 已经出好题（或确认不用出）的日期
@@ -42,12 +48,17 @@ export function createDailyRunner({ ai, llmFor, practice, log = console, now = (
         // 关了自动生成、或者还没到这个账户设的时间：先不管，下一分钟再看（中途改了设置也能跟上）
         if (!set.autoDaily || minute < minutesOf(set.dailyAt)) continue;
         try {
-          if (!(await llmFor(acc)).ready()) continue;
+          if (!(await llmFor(acc, BACKGROUND)).ready()) continue;
           if (await repo.hasDailyFor(acc.id, day)) {
             done.set(acc.id, day);
             continue;
           }
-          const ids = await ai.generate(acc, { source: 'daily', n: set.dailyCount, levels: set.levels });
+          const ids = await ai.generate(acc, {
+            source: 'daily',
+            n: set.dailyCount,
+            levels: set.levels,
+            background: true,
+          });
           done.set(acc.id, day);
           log.log(`[daily] ${day} ${acc.role === 'owner' ? '我' : acc.note || acc.id} 新增 ${ids.length} 句`);
         } catch (e) {

@@ -34,6 +34,9 @@ services:
     environment:
       DB_HOST: db
       PORT: '3000'
+    # 让容器能访问宿主机上的 Clash（.env 里 OPENAI_PROXY=http://host.docker.internal:7890），只有 ChatGPT 的请求走它
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
     depends_on:
       db:
         condition: service_healthy

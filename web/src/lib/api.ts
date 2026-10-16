@@ -1,6 +1,11 @@
 // 和后端说话。401 时通知页面回到输密码的界面。返回值的类型来自 @sentence-site/shared，和后端一致。
 import type {
   Attempt,
+  ChatgptDisconnect,
+  ChatgptModel,
+  ChatgptStart,
+  ChatgptUse,
+  ChatgptView,
   Invite,
   LlmForm,
   LlmSettingsView,
@@ -123,4 +128,16 @@ export const api = {
     request<LlmSettingsView>('DELETE', `/api/settings/llm${provider ? `?provider=${enc(provider)}` : ''}`),
   testLlm: (body: LlmForm) => request<LlmTestResult>('POST', '/api/settings/llm/test', body),
   listModels: (body: LlmForm) => request<{ models: string[] }>('POST', '/api/settings/llm/models', body),
+
+  // ChatGPT 套餐（只有你自己能用）
+  chatgpt: () => request<ChatgptView>('GET', '/api/settings/chatgpt'),
+  saveChatgpt: (body: { mainModel?: string; lightModel?: string; use?: Partial<ChatgptUse>; background?: boolean }) =>
+    request<ChatgptView>('PUT', '/api/settings/chatgpt', body),
+  /** 生成授权链接；授权后把浏览器跳到的 127.0.0.1 地址整段交给 finishChatgpt */
+  startChatgpt: () => request<ChatgptStart>('POST', '/api/settings/chatgpt/start'),
+  finishChatgpt: (callbackUrl: string) => request<ChatgptView>('POST', '/api/settings/chatgpt/finish', { callbackUrl }),
+  chatgptModels: () => request<{ models: ChatgptModel[] }>('POST', '/api/settings/chatgpt/models'),
+  testChatgpt: () => request<LlmTestResult>('POST', '/api/settings/chatgpt/test'),
+  resumeChatgpt: () => request<ChatgptView>('POST', '/api/settings/chatgpt/resume'),
+  disconnectChatgpt: () => request<ChatgptDisconnect>('DELETE', '/api/settings/chatgpt'),
 };

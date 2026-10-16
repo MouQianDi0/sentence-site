@@ -1,4 +1,4 @@
-// “设置”页：每日任务、邀请码入口（只有你自己）、AI 批改（准确度提升）、Token 用量入口、模型设置、账户。
+// “设置”页：每日任务、邀请码入口（只有你自己）、AI 批改（准确度提升）、Token 用量入口、ChatGPT 套餐（只有你自己）、模型设置、账户。
 // 第一次进入时几块的数据一起读好再一起显示、只播一次进场动画；之后再进入先显示上次读到的，
 // 后台读到新数据再悄悄更新（不再播动画），所以不会一块一块地闪出来。
 // 邀请码管理、Token 用量是从设置主页点进去的单独页面（/settings/invites、/settings/usage），手机的返回手势能回到设置主页。
@@ -15,6 +15,7 @@ import { createSettingsView } from './llm-settings.ts';
 import { createTaskSettings } from './task-settings.ts';
 import { createInvites, inviteEntryHTML, accountHTML } from './invites.ts';
 import { createUsage, usageEntryHTML } from './usage.ts';
+import { createChatgptSettings } from './chatgpt-settings.ts';
 
 const isOwner = () => state.me?.role === 'owner';
 
@@ -22,6 +23,7 @@ let taskSettings: ReturnType<typeof createTaskSettings>;
 let invitesView: ReturnType<typeof createInvites>;
 let usageView: ReturnType<typeof createUsage>;
 let llmView: ReturnType<typeof createSettingsView>;
+let chatgptView: ReturnType<typeof createChatgptSettings>;
 
 let seq = 0;
 let shown: SettingsSub | null = null; // 正在看的单独页面（邀请码管理 / Token 用量）；在设置主页时是 null
@@ -36,7 +38,15 @@ const allowed = (sub: SettingsSub | null): SettingsSub | null => (sub === 'invit
 /** 单独页面的组件 */
 const viewOf = (sub: SettingsSub) => (sub === 'invites' ? invitesView : usageView);
 
-const MAIN_IDS = ['taskSettings', 'inviteEntry', 'gradeSettings', 'usageEntry', 'llmSettings', 'accountSettings'];
+const MAIN_IDS = [
+  'taskSettings',
+  'inviteEntry',
+  'gradeSettings',
+  'usageEntry',
+  'chatgptSettings',
+  'llmSettings',
+  'accountSettings',
+];
 
 function renderInviteEntry(): void {
   $('inviteEntry').innerHTML = isOwner() ? inviteEntryHTML(invitesView.summary()) : '';
@@ -44,6 +54,12 @@ function renderInviteEntry(): void {
 
 function renderUsageEntry(): void {
   $('usageEntry').innerHTML = usageEntryHTML(usageView.summary());
+}
+
+/** ChatGPT 套餐只有你自己能用，别的账户这块是空的 */
+function renderChatgpt(): void {
+  if (isOwner()) chatgptView.render();
+  else $('chatgptSettings').innerHTML = '';
 }
 
 /** 设置主页上要显示的几块（不含单独页面） */
@@ -60,6 +76,7 @@ function renderSettingsMain(enter: boolean): void {
   taskSettings.render();
   renderInviteEntry();
   renderUsageEntry();
+  renderChatgpt();
   llmView.render();
   $('accountSettings').innerHTML = state.me ? accountHTML(state.me) : '';
   setLoading(false);
@@ -72,8 +89,15 @@ export async function openSettings(): Promise<void> {
   llmView.reset();
   invitesView.reset();
   usageView.reset();
-  // 邀请码管理只有你自己（访问密码登录）看得到；模型设置、Token 用量每个账户都有，各看各的
-  const parts = { task: taskSettings, llm: llmView, usage: usageView, invites: isOwner() ? invitesView : null };
+  chatgptView.reset();
+  // 邀请码管理、ChatGPT 套餐只有你自己（访问密码登录）看得到；模型设置、Token 用量每个账户都有，各看各的
+  const parts = {
+    task: taskSettings,
+    llm: llmView,
+    usage: usageView,
+    invites: isOwner() ? invitesView : null,
+    chatgpt: isOwner() ? chatgptView : null,
+  };
   const list = Object.values(parts).filter((p) => p !== null);
   const cached = list.every((p) => p.hasData());
   const asked = shown || atSub();
@@ -89,11 +113,12 @@ export async function openSettings(): Promise<void> {
     setLoading(true);
     if (want) viewOf(want).render();
   }
-  const [task, llm, usage, invites] = await Promise.all([
+  const [task, llm, usage, invites, gpt] = await Promise.all([
     parts.task.load(),
     parts.llm.load(),
     parts.usage.load(),
     parts.invites ? parts.invites.load() : Promise.resolve(false),
+    parts.chatgpt ? parts.chatgpt.load() : Promise.resolve(false),
   ]);
   if (mine !== seq || state.view !== 'settings') return;
   if (!cached) {
@@ -104,6 +129,7 @@ export async function openSettings(): Promise<void> {
   // 再次进入：只更新有变化的那几块，不播动画；正在改的那块先不动
   if (task && !taskSettings.editing()) taskSettings.render();
   if (llm) llmView.refresh();
+  if (gpt) chatgptView.refresh();
   if (usage) {
     renderUsageEntry();
     if (shown === 'usage') usageView.render();
@@ -227,6 +253,7 @@ export function initSettings(): void {
     onBack: () => closeSub(),
     boost: () => state.practiceCfg.accuracyBoost,
   });
+  chatgptView = createChatgptSettings({ root: $('chatgptSettings'), toast });
   llmView = createSettingsView({
     root: $('llmSettings'),
     toast,
@@ -234,6 +261,8 @@ export function initSettings(): void {
       state.usage = await api.usage().catch(() => state.usage);
       if (state.cur && state.step === 3) renderPanel(false);
       renderTask();
+      // ChatGPT 卡片上“没有备用的国内模型”的提示跟着变
+      if (isOwner() && (await chatgptView.load())) chatgptView.refresh();
     },
   });
 

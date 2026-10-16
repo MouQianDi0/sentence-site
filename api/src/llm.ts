@@ -61,6 +61,9 @@ export function thinkingOffParams(baseUrl: string): Record<string, unknown> {
   return { thinking: { type: 'disabled' } }; // DeepSeek、智谱 GLM、Kimi 等
 }
 
+/** 系统提示：国内模型和 ChatGPT 共用 */
+export const SYSTEM_PROMPT = '你是严谨的英语教学助手。只输出一个合法的 JSON 对象，不要输出任何其他文字。';
+
 interface ChatMessage {
   content?: string | null;
   reasoning_content?: string | null;
@@ -137,7 +140,7 @@ export function createLlm(cfg: { llm: LlmConfig }, fetchImpl: FetchLike = global
     const body: Record<string, unknown> = {
       model,
       messages: [
-        { role: 'system', content: '你是严谨的英语教学助手。只输出一个合法的 JSON 对象，不要输出任何其他文字。' },
+        { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: prompt },
       ],
     };

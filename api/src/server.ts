@@ -11,6 +11,8 @@ import { createAi } from './ai.ts';
 import { startDailyJob } from './daily.ts';
 import { createSettings, createSettingsHub } from './settings.ts';
 import { createPractice } from './practice.ts';
+import { createChatgpt } from './chatgpt.ts';
+import { routeLlm } from './llm-route.ts';
 
 async function waitForDb(tries = 30) {
   for (let i = 1; i <= tries; i++) {
@@ -47,15 +49,29 @@ async function main() {
   // 每日任务的句数和难度（每个账户各一份）
   const practice = createPractice(config);
   const llm = createLlm(config);
-  // 模型配置按账户：你自己用上面这份（可以退回 .env），邀请账户各用自己填的
-  const hub = createSettingsHub(config, { ownerSvc: settings, ownerLlm: llm, createLlm });
+  // ChatGPT 套餐：只给你自己的账户用，出题改题按设置走它，用不了时回退到上面的国内模型
+  const chatgpt = createChatgpt({ cfg: config, fallbackReady: () => llm.ready() });
+  await chatgpt.load();
+  // 模型配置按账户：你自己用上面这份（可以退回 .env，再加上 ChatGPT），邀请账户各用自己填的
+  const hub = createSettingsHub(config, {
+    ownerSvc: settings,
+    ownerLlm: llm,
+    createLlm,
+    routeOwner: (base, use) => routeLlm({ plan: chatgpt, fallback: base, use }),
+  });
   const ai = createAi({ cfg: config, llm, llmFor: hub.llmFor }); // 网页和每日定时任务共用一个，避免同时生成今日任务
-  const handler = createApp(config, { llm, settings, practice, hub, ai });
+  const handler = createApp(config, { llm, settings, practice, hub, ai, chatgpt });
   const server = http.createServer(handler);
   server.listen(config.port, () => {
     console.log(
       `[api] 已启动，端口 ${config.port}；AI 模型${llm.ready() ? `：${config.llm.mainModel}（${settings.view().source === 'page' ? '网页设置' : '.env'}）` : '：未配置，可以在网站的“设置”里填写'}`,
     );
+    const g = chatgpt.view();
+    if (g.status !== 'none') {
+      console.log(
+        `[api] ChatGPT 套餐：${g.ready ? `已连接（${g.mainModel}）` : g.status === 'ok' ? '已连接，暂时不可用' : '要重新连接'}`,
+      );
+    }
   });
 
   const stopDaily = startDailyJob({ cfg: config, ai, llmFor: hub.llmFor, practice });
