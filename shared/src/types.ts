@@ -320,3 +320,58 @@ export interface LlmTestResult {
   ok: boolean;
   results: LlmTestItem[];
 }
+
+// ---- ChatGPT 套餐（Sign in with ChatGPT，只有你自己的账户能用）--------------------------
+/** 哪些用途走 ChatGPT 套餐：改题；出题（含出题后的谓语复核）；查词 */
+export interface ChatgptUse {
+  grade: boolean;
+  generate: boolean;
+  lookup: boolean;
+}
+
+/** ChatGPT 账号能用的模型（/v1/models 里 visibility 是 list 的） */
+export interface ChatgptModel {
+  slug: string;
+  name: string;
+}
+
+/**
+ * GET /api/settings/chatgpt
+ * status：none 没连接；ok 正常；reauth 授权失效要重新连接；ineligible 这个账号不能用套餐额度（要 Plus 或 Pro）
+ */
+export interface ChatgptView {
+  /** .env 里有没有配 OPENAI_PROXY（服务器在国内时必须配） */
+  proxy: boolean;
+  status: 'none' | 'ok' | 'reauth' | 'ineligible';
+  email: string;
+  name: string;
+  /** 授权时同意了“使用 ChatGPT 套餐”（chatgpt.tokens.use.direct） */
+  planGranted: boolean;
+  mainModel: string;
+  lightModel: string;
+  use: ChatgptUse;
+  /** 每日任务定时自动出题时也用 ChatGPT（后台调用，打开才算同意） */
+  background: boolean;
+  /** 额度用完后暂停到什么时候；没暂停是 null */
+  pausedUntil: string | null;
+  pauseReason: string;
+  lastError: { at: string; message: string } | null;
+  connectedAt: string | null;
+  /** 现在能用 ChatGPT 出题改题 */
+  ready: boolean;
+  /** 国内模型配好了没有（ChatGPT 用不了时回退到它） */
+  fallbackReady: boolean;
+}
+
+/** POST /api/settings/chatgpt/start：在浏览器里打开 url 授权 */
+export interface ChatgptStart {
+  url: string;
+  /** 授权完成后浏览器会跳到这个前缀开头的地址（打不开是正常的），把整段地址粘贴回来 */
+  redirectPrefix: string;
+}
+
+/** DELETE /api/settings/chatgpt：revoked 是 OpenAI 那边确认吊销了授权 */
+export interface ChatgptDisconnect {
+  view: ChatgptView;
+  revoked: boolean;
+}

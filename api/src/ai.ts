@@ -21,6 +21,7 @@ import { checkSentence } from './validate.ts';
 import { shanghaiDate, shanghaiClock } from './time.ts';
 import { LEVELS, planLevels } from './practice.ts';
 import { metered } from './tokens.ts';
+import type { LlmUse } from './llm-route.ts';
 
 /** 模型回复里的任意对象 */
 type Loose = Record<string, unknown> | null | undefined;
@@ -123,7 +124,10 @@ type Review =
 export interface Ai {
   grade(account: Account, sentenceId: unknown, rawText: unknown, opts?: { boost?: boolean }): Promise<Attempt>;
   lookup(account: Account, sentenceId: unknown, rawWord: unknown): Promise<LookupResult>;
-  generate(account: Account, opts?: { source?: SentenceSource; n?: number; levels?: Level[] }): Promise<string[]>;
+  generate(
+    account: Account,
+    opts?: { source?: SentenceSource; n?: number; levels?: Level[]; background?: boolean },
+  ): Promise<string[]>;
   reviewOne(account: Account, id: unknown): Promise<{ sentence: Sentence | null; changed: boolean; note: string }>;
   setMarks(account: Account, id: unknown, spans: unknown): Promise<{ sentence: Sentence | null }>;
 }
@@ -136,7 +140,7 @@ export function createAi({
 }: {
   cfg: Pick<AppConfig, 'llm' | 'limits'>;
   llm: Llm;
-  llmFor?: (account: Account) => Promise<Llm>;
+  llmFor?: (account: Account, use?: LlmUse) => Promise<Llm>;
   log?: Logger;
 }): Ai {
   /**
@@ -175,7 +179,8 @@ export function createAi({
     if (!sentence) throw new HttpError(404, '句子不存在');
     let res: Review | undefined;
     try {
-      [res] = await reviewMarks(metered(await llmFor(account), account.id, 'review', log), [sentence]);
+      const L = metered(await llmFor(account, { kind: 'review' }), account.id, 'review', log);
+      [res] = await reviewMarks(L, [sentence]);
     } catch (e) {
       throw toHttpError(e);
     }
@@ -226,7 +231,7 @@ export function createAi({
     if (!sentence) throw new HttpError(404, '句子不存在');
     await checkLimit(account, 'grades', cfg.limits.grade, '今天的批改次数用完了（{n} 次），明天再来');
     // 评分和汇总的每次请求都记到这个账户的 token 用量里
-    const L = metered(await llmFor(account), account.id, 'grade', log);
+    const L = metered(await llmFor(account, { kind: 'grade' }), account.id, 'grade', log);
 
     // 1. 评分：每次都是一个全新的请求（只有系统提示 + 这一句的批改提示词，不带任何对话记录），
     //    几次之间互相看不到，也不会串到别的句子。开着准确度提升时并行评 GRADE_RUNS 次，分数取平均，减少单次评分的偶然性。
@@ -358,7 +363,7 @@ export function createAi({
     const cached = await repo.getDict(sentence.id, word);
     if (cached) return { word, data: cached as DictEntry, cached: true };
     await checkLimit(account, 'lookups', cfg.limits.lookup, '今天的查词次数用完了（{n} 次）');
-    const L = metered(await llmFor(account), account.id, 'lookup', log);
+    const L = metered(await llmFor(account, { kind: 'lookup' }), account.id, 'lookup', log);
 
     let result: Awaited<ReturnType<Llm['chatJson']>>;
     try {
@@ -412,10 +417,16 @@ export function createAi({
    * 生成 n 句并写入数据库，返回新句子的 id。
    * source：daily = 今日任务（不算进手动出题次数），extra = 加练。
    * levels：要出的难度，两种都选时各占一半、顺序随机。句子没通过校验或难度不对时会补出，最多多请求 2 次。
+   * background：定时任务触发的（没人在页面上点），你自己的账户只有在设置里同意了才会用 ChatGPT 套餐。
    */
   async function generate(
     account: Account,
-    { source = 'extra', n = 5, levels = LEVELS }: { source?: SentenceSource; n?: number; levels?: Level[] } = {},
+    {
+      source = 'extra',
+      n = 5,
+      levels = LEVELS,
+      background = false,
+    }: { source?: SentenceSource; n?: number; levels?: Level[]; background?: boolean } = {},
   ): Promise<string[]> {
     if (source === 'daily') {
       if (dailyBusy.has(account.id)) throw new HttpError(409, '今天的任务正在生成，稍等一下');
@@ -425,9 +436,8 @@ export function createAi({
       if (source !== 'daily')
         await checkLimit(account, 'gens', cfg.limits.generate, '今天加练出题的次数用完了（{n} 次）');
       // 出题和出题后的谓语复核分开记 token 用量
-      const base = await llmFor(account);
-      const L = metered(base, account.id, 'generate', log);
-      const reviewer = metered(base, account.id, 'review', log);
+      const L = metered(await llmFor(account, { kind: 'generate', background }), account.id, 'generate', log);
+      const reviewer = metered(await llmFor(account, { kind: 'review', background }), account.id, 'review', log);
       const day = shanghaiDate();
       const clock = shanghaiClock();
       const now = Date.now();

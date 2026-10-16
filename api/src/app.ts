@@ -1,6 +1,6 @@
 // 路由和请求处理。createApp() 返回一个 (req, res) 处理函数，测试里也直接用它。
 import type { IncomingMessage, ServerResponse, OutgoingHttpHeaders } from 'node:http';
-import type { AccountRole, Invite, LlmTestItem } from '@sentence-site/shared';
+import type { AccountRole, ChatgptDisconnect, Invite, LlmTestItem } from '@sentence-site/shared';
 import type { AppConfig } from './config.ts';
 import * as repo from './repo.ts';
 import type { AccountRow } from './repo.ts';
@@ -19,6 +19,8 @@ import {
 } from './settings.ts';
 import { createPractice, MAX_DAILY } from './practice.ts';
 import { metered, tokenStats } from './tokens.ts';
+import { createChatgpt, type ChatgptService } from './chatgpt.ts';
+import { routeLlm, type LlmUse } from './llm-route.ts';
 import { createAccounts, memberVersion, newDeviceId, isDeviceId, isExpired, EXPIRED_MESSAGE } from './accounts.ts';
 import { shanghaiDate } from './time.ts';
 
@@ -46,6 +48,8 @@ export interface AppDeps {
   practice?: ReturnType<typeof createPractice> | null;
   hub?: SettingsHub | null;
   ai?: Ai | null;
+  /** ChatGPT 套餐（只给你自己用）；不传时自己建一个 */
+  chatgpt?: ChatgptService | null;
   log?: Logger;
 }
 
@@ -71,6 +75,7 @@ export function createApp(
     practice = null,
     hub: hubIn = null,
     ai: aiIn = null,
+    chatgpt: chatgptIn = null,
     log = console,
   }: AppDeps = {},
 ) {
@@ -81,13 +86,17 @@ export function createApp(
   const ownerOnly = { owner: true }; // 只有你自己（访问密码登录的账户）能用
   // 没有从外面传入时自己读取一次数据库里的模型配置
   const settingsSvc = settings || createSettings(cfg);
-  // 模型配置按账户：你自己用 settingsSvc / llm，邀请账户各用各的（只用它自己填的 API 密钥）
-  const hub = hubIn || createSettingsHub(cfg, { ownerSvc: settingsSvc, ownerLlm: llm, createLlm });
+  // ChatGPT 套餐：只有你自己的账户会用（按用途走它，出错回退到国内模型）
+  const chatgpt = chatgptIn || createChatgpt({ cfg, fallbackReady: () => llm.ready(), log });
+  const routeOwner = (base: Llm, use: LlmUse) => routeLlm({ plan: chatgpt, fallback: base, use, log });
+  // 模型配置按账户：你自己用 settingsSvc / llm（再加上 ChatGPT），邀请账户各用各的（只用它自己填的 API 密钥）
+  const hub = hubIn || createSettingsHub(cfg, { ownerSvc: settingsSvc, ownerLlm: llm, createLlm, routeOwner });
   const ai = aiIn || createAi({ cfg, llm, llmFor: hub.llmFor, log });
   const practiceSvc = practice || createPractice(cfg);
-  const settingsReady = settings
-    ? Promise.resolve()
-    : settingsSvc.load().catch((e: Error) => log.error('[settings]', e.message));
+  const settingsReady = Promise.all([
+    settings ? null : settingsSvc.load().catch((e: Error) => log.error('[settings]', e.message)),
+    chatgptIn ? null : chatgpt.load().catch((e: Error) => log.error('[chatgpt]', e.message)),
+  ]);
   const sessionOf = (req: IncomingMessage) =>
     accounts.resolve(auth.verify(parseCookies(req.headers.cookie)[COOKIE_NAME]), auth.ownerVersion, clientIp(req));
 
@@ -249,7 +258,7 @@ export function createApp(
         day,
         ...(await repo.getUsage(account.id, day)),
         limits: { grade: cfg.limits.grade, lookup: cfg.limits.lookup, generate: cfg.limits.generate },
-        aiReady: (await hub.llmFor(account)).ready(),
+        aiReady: (await hub.llmFor(account, { kind: 'grade' })).ready(),
       },
     };
   });
@@ -373,6 +382,85 @@ export function createApp(
       throw toHttpError(e);
     }
   });
+
+  // ---- ChatGPT 套餐（Sign in with ChatGPT，只有你自己能用）--------------------------------
+  // OpenAI 规定套餐凭据只能用于连接它的这个人自己的请求，所以这些接口和 ChatGPT 本身都只对 owner 开放
+  router.add('GET', '/api/settings/chatgpt', async () => ({ body: chatgpt.view() }), ownerOnly);
+
+  // 选模型、用途开关、后台出题开关：{mainModel, lightModel, use: {grade, generate, lookup}, background}
+  router.add(
+    'PUT',
+    '/api/settings/chatgpt',
+    async ({ req }) => ({ body: await chatgpt.save(await readJson(req)) }),
+    ownerOnly,
+  );
+
+  // 生成授权链接：在浏览器里打开，授权完成后把跳转到的 127.0.0.1 地址整段粘贴回来
+  router.add('POST', '/api/settings/chatgpt/start', async () => ({ body: await chatgpt.start() }), ownerOnly);
+
+  // {callbackUrl}：粘贴回来的地址。服务器（通过 OPENAI_PROXY）换 token、校验后保存
+  router.add(
+    'POST',
+    '/api/settings/chatgpt/finish',
+    async ({ req }) => ({ body: await chatgpt.finish((await readJson(req)).callbackUrl) }),
+    ownerOnly,
+  );
+
+  router.add(
+    'POST',
+    '/api/settings/chatgpt/models',
+    async () => {
+      try {
+        return { body: { models: await chatgpt.models() } };
+      } catch (e) {
+        throw toHttpError(e);
+      }
+    },
+    ownerOnly,
+  );
+
+  // 用主力、轻量模型各调用一次；都成功时顺便取消暂停
+  router.add(
+    'POST',
+    '/api/settings/chatgpt/test',
+    async ({ account }) => {
+      const v = chatgpt.view();
+      if (v.status !== 'ok') throw new HttpError(400, v.status === 'none' ? '先连接 ChatGPT' : '先重新连接 ChatGPT');
+      if (!v.mainModel) throw new HttpError(400, '先选择 ChatGPT 的主力模型');
+      const probe = metered(chatgpt.probe, account.id, 'test', log);
+      const results: LlmTestItem[] = [];
+      for (const model of [...new Set([v.mainModel, v.lightModel || v.mainModel])]) {
+        const started = Date.now();
+        try {
+          const r = await probe.chatJson({ prompt: '这是一次连接测试。请只回复这个 JSON 对象：{"ok": true}', model });
+          results.push({ model, ok: true, latencyMs: Date.now() - started, answeredBy: r.model });
+        } catch (e) {
+          const item: LlmTestItem = {
+            model,
+            ok: false,
+            latencyMs: Date.now() - started,
+            error: toHttpError(e).message,
+          };
+          if (e instanceof LlmError && e.detail) item.sample = e.detail.slice(0, 200);
+          results.push(item);
+        }
+      }
+      const ok = results.every((r) => r.ok);
+      if (ok && chatgpt.view().pausedUntil) await chatgpt.resume();
+      return { body: { ok, results } };
+    },
+    ownerOnly,
+  );
+
+  router.add('POST', '/api/settings/chatgpt/resume', async () => ({ body: await chatgpt.resume() }), ownerOnly);
+
+  // 断开：到 OpenAI 吊销授权，删掉保存的凭据；revoked 为 false 时提示到 ChatGPT 设置里手动断开
+  router.add(
+    'DELETE',
+    '/api/settings/chatgpt',
+    async (): Promise<{ body: ChatgptDisconnect }> => ({ body: await chatgpt.disconnect() }),
+    ownerOnly,
+  );
 
   // ---- 处理请求 ---------------------------------------------------------------
   return async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> {

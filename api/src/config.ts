@@ -26,6 +26,8 @@ export interface AppConfig {
   llm: LlmConfig;
   /** .env 里原始的模型配置（第一次创建设置服务时记下） */
   envLlm?: LlmConfig;
+  /** 发往 OpenAI（ChatGPT 套餐）的请求走的 HTTP 代理，例如服务器上的 Clash；空表示直连 */
+  openaiProxy: string;
   limits: { grade: number; lookup: number; generate: number };
   daily: { enabled: boolean; hour: number; minute: number; count: number };
   seedFile: string;
@@ -57,6 +59,8 @@ export function loadConfig(e: Env = process.env): AppConfig {
       thinking: e.LLM_THINKING === '1',
       timeoutMs: num(e.LLM_TIMEOUT_MS, 90_000),
     },
+    // 服务器在国内连不上 OpenAI 时填 Clash 的 HTTP 代理，例如 http://host.docker.internal:7890；只有 ChatGPT 的请求会走它
+    openaiProxy: (e.OPENAI_PROXY || '').trim(),
     limits: {
       grade: num(e.DAILY_GRADE_LIMIT, 100),
       lookup: num(e.DAILY_LOOKUP_LIMIT, 300),

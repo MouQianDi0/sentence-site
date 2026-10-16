@@ -4,6 +4,7 @@
 import type { LlmSettingsView, ProviderId, ProviderView } from '@sentence-site/shared';
 import type { AppConfig, LlmConfig } from './config.ts';
 import type { Llm } from './llm.ts';
+import type { LlmUse } from './llm-route.ts';
 import * as repo from './repo.ts';
 import { encrypt, decrypt, maskKey } from './secret.ts';
 import { HttpError, type JsonBody } from './http.ts';
@@ -360,6 +361,8 @@ type AccountRef = { id: string; role: string } | null | undefined;
 /**
  * 按账户取模型配置和 AI 客户端：你自己用 ownerSvc / ownerLlm（可以退回 .env）；
  * 邀请账户第一次用到时从 accounts.llm 读出来，各自一个 AI 客户端，只用它自己填的 API 密钥。
+ * routeOwner：只给你自己用的一层（按用途走 ChatGPT 套餐、出错回退到 ownerLlm，见 llm-route.ts）。
+ * 邀请账户永远拿不到它——OpenAI 规定 ChatGPT 套餐的凭据只能用于连接它的这个人自己的请求。
  */
 export function createSettingsHub(
   cfg: AppConfig,
@@ -367,7 +370,13 @@ export function createSettingsHub(
     ownerSvc,
     ownerLlm,
     createLlm,
-  }: { ownerSvc: SettingsService; ownerLlm: Llm; createLlm: (c: { llm: LlmConfig }) => Llm },
+    routeOwner = null,
+  }: {
+    ownerSvc: SettingsService;
+    ownerLlm: Llm;
+    createLlm: (c: { llm: LlmConfig }) => Llm;
+    routeOwner?: ((base: Llm, use: LlmUse) => Llm) | null;
+  },
 ) {
   type Entry = { svc: SettingsService; llm: Llm };
   const members = new Map<string, Promise<Entry>>(); // 账户 id -> Promise<{ svc, llm }>
@@ -390,9 +399,16 @@ export function createSettingsHub(
     return p;
   }
 
+  /** use：这次调用模型是做什么用的。只有你自己的账户会按它走 ChatGPT 套餐 */
+  async function llmFor(account: AccountRef, use?: LlmUse): Promise<Llm> {
+    const { llm } = await get(account);
+    const owner = !account || account.role === 'owner';
+    return owner && use && routeOwner ? routeOwner(llm, use) : llm;
+  }
+
   return {
     get,
-    llmFor: async (account: AccountRef): Promise<Llm> => (await get(account)).llm,
+    llmFor,
     /** 账户删除后丢掉缓存 */
     drop: (id: string) => members.delete(id),
   };
