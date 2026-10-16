@@ -2,6 +2,31 @@
 
 所有代码变更都记在这里，新的在最上面。时间是北京时间。
 
+## 2026-10-16 22:25:50
+
+**变更类型**：优化代码（文档和配置说明）
+
+**变更概述**：ChatGPT 套餐的代理配置说明改成以“mihomo 跑在 Docker 的 proxy-net 网络里”为主，服务器自己的 `docker-compose.override.yml` 不进仓库。
+
+**修改的文件**
+
+- 修改 `README.md`
+- 修改 `.env.example`
+- 修改 `.gitignore`
+- 修改 `CHANGELOG.md`
+
+**具体内容**
+
+- `README.md` 重写「ChatGPT 套餐 → 服务器上先配好代理」，改为以下步骤：
+  - mihomo 打开 `allow-lan`，`lan-allowed-ips` 限制为 proxy-net 的网段（附查网段的命令）；
+  - 用 `docker port mihomo` 检查 7890 有没有对公网开放；
+  - 在服务器上新建 `docker-compose.override.yml`，让 api 同时加入 `default` 和 `proxy-net`，并说明为什么必须写 `default`、为什么不能写进仓库的 `docker-compose.yml`；
+  - `.env` 写 `OPENAI_PROXY=http://mihomo:7890`，并说明不要设 `HTTP_PROXY` / `HTTPS_PROXY`。
+  - 原来的宿主机 Clash（`host.docker.internal`）写法保留为另一种方式。
+- `.env.example`：`OPENAI_PROXY` 的注释写明容器里的 mihomo、宿主机 Clash、带用户名密码三种写法，示例改为 `http://mihomo:7890`。
+- `.gitignore`：忽略 `docker-compose.override.yml`（服务器自己的 Compose 补充配置）。
+- 用 `docker compose config` 验证过：合并 README 里的 override 写法后，api 同时在 `default` 和外部网络 `proxy-net` 上。代码和 `docker-compose.yml` 没有改动。
+
 ## 2026-10-16 19:14:09
 
 **变更类型**：新增功能

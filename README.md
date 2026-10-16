@@ -143,10 +143,33 @@ sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 htt
 
 ### 服务器上先配好代理（只做一次）
 
-1. Clash（mihomo）的配置里：`mixed-port: 7890`（或 `port`）、`allow-lan: true`；规则模式下给 `openai.com` 和 `chatgpt.com` 指定一个 **OpenAI 支持地区** 的节点（美国、日本、新加坡等，**不能是香港**），例如 `- DOMAIN-SUFFIX,openai.com,美国节点` 和 `- DOMAIN-SUFFIX,chatgpt.com,美国节点`（节点组名换成你自己的）。
-2. **不要让外网用到这个代理**：`allow-lan` 会让 7890 监听所有网卡。确认腾讯云安全组没有放行 7890；在你自己电脑上执行 `curl -m 5 -x http://服务器公网IP:7890 https://www.example.com` 应该连不上。想再保险可以在 Clash 里设 `authentication: ["用户名:密码"]`，下面的地址写成 `http://用户名:密码@host.docker.internal:7890`。
-3. `.env` 里加一行 `OPENAI_PROXY=http://host.docker.internal:7890`，然后 `sudo docker compose up -d --force-recreate api`。容器通过 `host.docker.internal` 访问宿主机（`docker-compose.yml` 里已经配好）。只有发往 OpenAI 的请求走这个代理，国内模型照旧直连。
-4. 检查：`sudo docker compose exec api node scripts/check-openai.ts`，会显示能不能连上 OpenAI、OpenAI 看到的出口地区。全是 ✓ 再去网站上连接。
+下面按 mihomo（Clash.Meta）跑在 Docker 里来写：容器名 `mihomo`，在一个叫 `proxy-net` 的 Docker 网络上，HTTP 代理端口 7890。
+
+1. **mihomo 的配置**：
+   - `mixed-port: 7890`、`allow-lan: true`（网站容器的请求从 proxy-net 网段过来，对 mihomo 来说不算本机，不开连不上）；
+   - `lan-allowed-ips` 填 proxy-net 的网段，只让这个网络里的容器用。网段用 `docker network inspect proxy-net -f '{{range .IPAM.Config}}{{.Subnet}}{{end}}'` 查；
+   - 规则模式下，把 `- DOMAIN-SUFFIX,openai.com,节点组` 和 `- DOMAIN-SUFFIX,chatgpt.com,节点组` 放在 `rules` 最前面。节点组里只放 **OpenAI 支持地区** 的节点（美国、日本、新加坡等，**不能是香港**），组名换成你自己的。
+2. **不要让外网用到这个代理**：运行 `docker port mihomo`，如果显示 `0.0.0.0:7890`，说明端口对公网开着（Docker 映射的端口会绕过 ufw，只剩腾讯云安全组拦着）。网站和其他容器都是通过 proxy-net 访问它，宿主机用不到的话，就去掉启动参数里的 `-p 7890:7890`；宿主机自己也要用的话，改成 `-p 127.0.0.1:7890:7890`。
+3. **让 api 容器加入 proxy-net**：在 `/opt/sentence-site/` 下新建 `docker-compose.override.yml`：
+
+   ```yaml
+   services:
+     api:
+       networks:
+         - default # 一定要写：写了 networks 后不会再自动加入默认网络，少了它 api 连不上数据库
+         - proxy-net
+   networks:
+     proxy-net:
+       external: true
+   ```
+
+   `docker compose up`（包括自动更新）会自动合并这个文件。更新时的 `git reset --hard` 不会删掉它，`.gitignore` 里也已经忽略了它。不要把 proxy-net 写进仓库里的 `docker-compose.yml`：GitHub Actions 里没有这个网络，检查会失败，自动部署就停了。
+4. **`.env` 里加一行** `OPENAI_PROXY=http://mihomo:7890`，然后运行 `sudo docker compose up -d --force-recreate api`。只有发往 OpenAI 的请求走这个代理，国内模型照旧直连。**不要**给 api 设 `HTTP_PROXY` / `HTTPS_PROXY`：后端的 `fetch` 本来就不读这两个变量，以后要是读了，国内模型的请求也会被送进 Clash。
+5. **检查**：运行 `sudo docker compose exec api node scripts/check-openai.ts`，会显示能不能连上 OpenAI，以及 OpenAI 看到的出口地区。全是 ✓ 再去网站上连接。
+
+Clash 装在宿主机上（不在 Docker 里）时，不用第 3 步，`.env` 写 `OPENAI_PROXY=http://host.docker.internal:7890`（`docker-compose.yml` 里已经配好了 `host.docker.internal`）。Clash 那边同样要打开 `allow-lan`，并确认腾讯云安全组没放行 7890：在你自己电脑上执行 `curl -m 5 -x http://服务器公网IP:7890 https://www.example.com` 应该连不上。
+
+不管哪种方式，Clash 设了用户名密码（`authentication`）时，地址写成 `http://用户名:密码@mihomo:7890` 这种格式。
 
 ### 连接（建议在电脑浏览器上做）
 
