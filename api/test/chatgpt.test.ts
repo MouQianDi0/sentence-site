@@ -4,9 +4,13 @@
 import { test, before, after, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs/promises';
 import http from 'node:http';
+import https from 'node:https';
 import net from 'node:net';
+import os from 'node:os';
+import path from 'node:path';
 import { setQueryImpl } from '../src/db.ts';
 import { loadConfig, type AppConfig } from '../src/config.ts';
 import { createApp } from '../src/app.ts';
@@ -102,7 +106,7 @@ async function startFakeOpenai(): Promise<FakeOpenai> {
     const raw = await readBody(req);
     if (url.pathname === '/.well-known/jwks.json') return json(res, 200, { keys: [JWK] });
     if (url.pathname === '/.well-known/openid-configuration') {
-      return json(res, 200, { issuer: ISSUER, revocation_endpoint: `${base}/oauth/revoke` });
+      return json(res, 200, { issuer: ISSUER, revocation_endpoint: `http://${req.headers.host}/oauth/revoke` });
     }
     if (url.pathname === '/oauth/revoke') {
       f.revoked.push(new URLSearchParams(raw).get('token') || '');
@@ -242,6 +246,9 @@ async function startFakeOpenai(): Promise<FakeOpenai> {
 }
 
 // ---- 假的 Clash：HTTP CONNECT 代理 -----------------------------------------------------
+// 以 .invalid 结尾的域名只有这个代理认识（转到 127.0.0.1），本机直接解析不了：
+// 请求要是绕过了隧道直连，就会报“域名解析不了”，测试立刻失败。
+const tunnelOnly = (host: string) => (host.endsWith('.invalid') ? '127.0.0.1' : host);
 
 interface FakeProxy {
   url: string;
@@ -265,8 +272,8 @@ async function startProxy(requireAuth?: string): Promise<FakeProxy> {
       client.end('HTTP/1.1 407 Proxy Authentication Required\r\n\r\n');
       return;
     }
-    const [host, port] = String(req.url).split(':');
-    const up = net.connect(Number(port), host, () => {
+    const [host = '', port] = String(req.url).split(':');
+    const up = net.connect(Number(port), tunnelOnly(host), () => {
       client.write('HTTP/1.1 200 Connection Established\r\n\r\n');
       if (head.length) up.write(head);
       up.pipe(client);
@@ -351,11 +358,12 @@ test('代理隧道：经过 CONNECT 代理请求，带上代理的用户名密�
   const proxy = await startProxy(`Basic ${Buffer.from('u:p w').toString('base64')}`);
   try {
     const f = createOpenaiFetch(proxy.url.replace('http://', 'http://u:p%20w@'));
-    const r = await f(`http://127.0.0.1:${port}/v1/x?y=1`, { method: 'POST', body: '{}' });
+    // 只有代理认识这个域名：拿到回复就说明请求确实走了隧道
+    const r = await f(`http://only-via-proxy.invalid:${port}/v1/x?y=1`, { method: 'POST', body: '{}' });
     assert.equal(r.status, 200);
     assert.equal(r.headers.get('x-path'), '/v1/x?y=1');
     assert.equal(await r.text(), '第一段第二段');
-    assert.deepEqual(proxy.connects, [`127.0.0.1:${port}`]);
+    assert.deepEqual(proxy.connects, [`only-via-proxy.invalid:${port}`]);
 
     // 用户名密码不对：说明是代理拒绝了
     const bad = createOpenaiFetch(proxy.url);
@@ -385,6 +393,81 @@ test('代理隧道：超时会中止，错误名是 TimeoutError（和全局 fet
     proxy.close();
     slow.closeAllConnections();
     slow.close();
+  }
+});
+
+/** 临时生成一张自签证书（CI 和本机都有 openssl；没有就跳过 https 的测试） */
+async function selfSigned(name: string): Promise<{ key: string; cert: string } | null> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ss-tls-'));
+  try {
+    execFileSync(
+      'openssl',
+      [
+        'req',
+        '-x509',
+        '-newkey',
+        'rsa:2048',
+        '-nodes',
+        '-days',
+        '1',
+        '-subj',
+        `/CN=${name}`,
+        '-addext',
+        `subjectAltName=DNS:${name}`,
+        '-addext',
+        'basicConstraints=critical,CA:TRUE',
+        '-keyout',
+        path.join(dir, 'k.pem'),
+        '-out',
+        path.join(dir, 'c.pem'),
+      ],
+      { stdio: 'ignore' },
+    );
+    return {
+      key: await fs.readFile(path.join(dir, 'k.pem'), 'utf8'),
+      cert: await fs.readFile(path.join(dir, 'c.pem'), 'utf8'),
+    };
+  } catch {
+    return null;
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+test('代理隧道：https 在隧道里握手 TLS（OpenAI 的真实情况），GET 和流式 POST 都通', async (t) => {
+  const name = 'secure-openai.invalid';
+  const tls = await selfSigned(name);
+  if (!tls) return t.skip('没有 openssl');
+  const target = https.createServer(tls, (req, res) => {
+    let body = '';
+    req.on('data', (c) => (body += c));
+    req.on('end', () => {
+      res.writeHead(200, { 'Content-Type': 'text/plain', 'X-Host': String(req.headers.host) });
+      res.write(`${req.method} ${body}|`);
+      setTimeout(() => res.end('完'), 20);
+    });
+  });
+  await new Promise<void>((r) => target.listen(0, '127.0.0.1', r));
+  const port = (target.address() as { port: number }).port;
+  const proxy = await startProxy();
+  try {
+    const f = createOpenaiFetch(proxy.url, { ca: tls.cert });
+    const g = await f(`https://${name}:${port}/.well-known/openid-configuration`);
+    assert.equal(g.status, 200);
+    assert.equal(g.headers.get('x-host'), `${name}:${port}`);
+    assert.equal(await g.text(), 'GET |完');
+    const p = await f(`https://${name}:${port}/v1/responses`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{"a":1}',
+    });
+    assert.equal(await p.text(), 'POST {"a":1}|完');
+    assert.deepEqual(proxy.connects, [`${name}:${port}`, `${name}:${port}`]);
+    // 证书不受信任时要报错，不能悄悄降级成明文
+    await assert.rejects(createOpenaiFetch(proxy.url)(`https://${name}:${port}/`));
+  } finally {
+    proxy.close();
+    target.close();
   }
 });
 
@@ -723,10 +806,19 @@ before(async () => {
   proxy = await startProxy();
   cfg = loadConfig({ ACCESS_PASSWORD: 'pw-1', COOKIE_SECRET: SECRET, OPENAI_PROXY: proxy.url, DAILY_GENERATE: '0' });
   const llm = createLlm(cfg);
-  // 经过假的 Clash 访问假的 OpenAI（OPENAI_PROXY 生效）
+  // 经过假的 Clash 访问假的 OpenAI（OPENAI_PROXY 生效）。地址换成只有代理认识的域名，请求绕过隧道就会失败
+  const viaProxy = (u: string) => u.replace('://127.0.0.1:', '://fake-openai.invalid:');
   const chatgpt = createChatgpt({
     cfg,
-    urls: { auth: fake.auth, api: fake.api },
+    urls: {
+      auth: {
+        authorize: viaProxy(fake.auth.authorize),
+        token: viaProxy(fake.auth.token),
+        jwks: viaProxy(fake.auth.jwks),
+        config: viaProxy(fake.auth.config),
+      },
+      api: viaProxy(fake.api),
+    },
     fallbackReady: () => llm.ready(),
     log: quiet,
   });
@@ -793,7 +885,10 @@ test('网站：连接 ChatGPT（经过代理），你的改题走 ChatGPT，查�
   const fin = await owner.api('POST', '/api/settings/chatgpt/finish', { callbackUrl: browserApprove(fake, start.url) });
   assert.equal(fin.status, 200, JSON.stringify(fin.body));
   assert.equal(fin.body.ready, true);
-  assert.ok(proxy.connects.length > 0, '换 token、取公钥都经过了代理');
+  assert.ok(
+    proxy.connects.some((c) => c.startsWith('fake-openai.invalid:')),
+    '换 token、取公钥都经过了代理（只有代理认识这个域名）',
+  );
   const raw = db.raw("SELECT value::text FROM settings WHERE key = 'chatgpt'");
   assert.ok(!raw.includes(fake.access), '数据库里没有明文 token');
 

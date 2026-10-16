@@ -86,10 +86,15 @@ function tunnel(proxy: URL, host: string, port: number, signal?: AbortSignal): P
   });
 }
 
-/** 在隧道上握手 TLS（目标是 https 时） */
-function secure(raw: net.Socket, host: string, signal?: AbortSignal): Promise<tls.TLSSocket> {
+/** 在隧道上握手 TLS（目标是 https 时）。ca 只给测试用：信任测试里临时生成的证书 */
+function secure(raw: net.Socket, host: string, signal?: AbortSignal, ca?: string): Promise<tls.TLSSocket> {
   return new Promise((resolve, reject) => {
-    const s = tls.connect({ socket: raw, servername: net.isIP(host) ? undefined : host, ALPNProtocols: ['http/1.1'] });
+    const s = tls.connect({
+      socket: raw,
+      servername: net.isIP(host) ? undefined : host,
+      ALPNProtocols: ['http/1.1'],
+      ...(ca ? { ca } : {}),
+    });
     const onAbort = () => s.destroy(abortError(signal as AbortSignal));
     signal?.addEventListener('abort', onAbort, { once: true });
     s.once('secureConnect', () => {
@@ -114,8 +119,11 @@ function toHeaders(raw: http.IncomingHttpHeaders): Headers {
   return h;
 }
 
-/** 返回一个走代理的 fetch。proxyUrl 为空时就是全局 fetch。 */
-export function createOpenaiFetch(proxyUrl: string | null | undefined): OpenaiFetch {
+/**
+ * 返回一个走代理的 fetch。proxyUrl 为空时就是全局 fetch。
+ * opts.ca 只给测试用（信任临时生成的自签证书），正式运行不传，用系统自带的根证书。
+ */
+export function createOpenaiFetch(proxyUrl: string | null | undefined, opts: { ca?: string } = {}): OpenaiFetch {
   const proxy = parseProxy(proxyUrl);
   if (!proxy) return (url, init) => globalThis.fetch(url, init);
 
@@ -131,7 +139,7 @@ export function createOpenaiFetch(proxyUrl: string | null | undefined): OpenaiFe
     const raw = await tunnel(proxy, host, port, signal);
     let socket: net.Socket;
     try {
-      socket = isHttps ? await secure(raw, host, signal) : raw;
+      socket = isHttps ? await secure(raw, host, signal, opts.ca) : raw;
     } catch (e) {
       raw.destroy();
       throw e;
@@ -154,8 +162,9 @@ export function createOpenaiFetch(proxyUrl: string | null | undefined): OpenaiFe
           port,
           path: `${target.pathname}${target.search}`,
           headers,
-          agent: false,
-          // 隧道已经连好（https 时 TLS 也握手完了），直接在上面发 HTTP 请求
+          // 隧道已经连好（https 时 TLS 也握手完了），直接在上面发 HTTP 请求。
+          // 注意不能写 agent: false：那样 Node 会新建一个 Agent、不用这里的 createConnection，
+          // 自己直连目标地址的 443 端口发明文，绕过代理（OpenAI 那边回 400）。
           createConnection: () => socket,
         },
         (res) => {
