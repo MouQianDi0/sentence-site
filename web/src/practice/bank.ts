@@ -43,8 +43,20 @@ function dotHTML(s: Sentence, i: number, newCut: number): string {
   else if (tried) tone = 'border-mid bg-sheet text-mid';
   if (isCur) tone = (r?.done ? 'bg-ok-soft' : 'bg-sheet') + ' border-accent text-accent ring-[3px] ring-accent-soft';
   const isNew = !tried && Date.parse(s.created) > newCut;
-  return `<button data-sid="${esc(s.id)}" ${isCur ? 'data-cur' : ''} aria-label="第 ${i + 1} 句${r?.done ? '，已完成' : ''}"
-    class="relative h-8 w-8 flex-none cursor-pointer rounded-full border-[1.5px] font-mono text-[12.5px] tabular-nums transition-transform hover:-translate-y-0.5 ${tone}">${i + 1}${isNew ? '<span class="absolute -top-0.5 -right-0.5 h-[9px] w-[9px] rounded-full border-2 border-paper bg-r-adv"></span>' : ''}</button>`;
+  // 正在批改：外面转一圈；批改好了还没看：右上角一个小点（颜色和“新句子”的点不一样）
+  const busy = state.grading.has(s.id);
+  const unseen = !busy && state.gradeUnseen.has(s.id);
+  const badge = unseen
+    ? '<span class="absolute -top-0.5 -right-0.5 h-[9px] w-[9px] rounded-full border-2 border-paper bg-accent"></span>'
+    : isNew
+      ? '<span class="absolute -top-0.5 -right-0.5 h-[9px] w-[9px] rounded-full border-2 border-paper bg-r-adv"></span>'
+      : '';
+  const spin = busy
+    ? '<span class="pointer-events-none absolute -inset-[4px] animate-spin rounded-full border-2 border-transparent border-t-accent border-r-accent"></span>'
+    : '';
+  const extra = busy ? '，正在批改' : unseen ? '，批改好了还没看' : '';
+  return `<button data-sid="${esc(s.id)}" ${isCur ? 'data-cur' : ''} aria-label="第 ${i + 1} 句${r?.done ? '，已完成' : ''}${extra}"
+    class="relative h-8 w-8 flex-none cursor-pointer rounded-full border-[1.5px] font-mono text-[12.5px] tabular-nums transition-transform hover:-translate-y-0.5 ${tone}">${i + 1}${spin}${badge}</button>`;
 }
 
 export function initBank(): void {

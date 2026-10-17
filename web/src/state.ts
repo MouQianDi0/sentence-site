@@ -84,8 +84,12 @@ export const state = {
   /** 进入第 2 步时播一次荧光笔动画 */
   sweepPending: false,
   quizOpen: false,
-  grading: false,
-  gradeErr: '',
+  /** 正在批改的句子（按句子 id）。批改在后台进行，可以同时批改几句，批改时可以去做别的句子 */
+  grading: new Set<string>(),
+  /** 每句最近一次批改没成功的原因（重新批改时清掉） */
+  gradeErr: {} as Record<string, string>,
+  /** 在后台批改好、还没看过结果的句子：句库里那一句的圆点上有个小点，打开第 3 步就算看过了 */
+  gradeUnseen: new Set<string>(),
   /** 刚批改完，播一次分数动画 */
   freshFb: false,
   practiceCfg: {

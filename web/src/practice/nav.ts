@@ -25,8 +25,7 @@ export function open(id: string, { keepView = false } = {}): void {
     segPick: -1,
     wordSel: null,
     quizOpen: false,
-    grading: false,
-    gradeErr: '',
+    // 批改状态（grading、gradeErr）按句子记着，换句子不清掉：后台的批改照常进行，好了会提醒
     freshFb: false,
     fix: null,
     roleOn: { main: true, attr: true, noun: true, adv: true, nonfin: true },

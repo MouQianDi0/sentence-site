@@ -1,4 +1,5 @@
-// 第 3 步“翻译”：写译文交给 AI 批改、看批改结果，再从三个译文里选出最好的
+// 第 3 步“翻译”：写译文交给 AI 批改、看批改结果，再从三个译文里选出最好的。
+// 批改在后台进行：交上去以后可以去做别的句子（也可以同时批改好几句），批改好了屏幕下方提醒，点“查看”回到那一句。
 import type { Attempt } from '@sentence-site/shared';
 import { diff } from '@sentence-site/shared/text';
 import { api } from '../lib/api.ts';
@@ -8,10 +9,13 @@ import * as A from '../lib/anim.ts';
 import { toast } from '../lib/toast.ts';
 import { C, TONE } from '../styles.ts';
 import { state, rec, atts, lastAttempt, taskInfo } from '../state.ts';
+import { showView } from '../views.ts';
+import { renderRecords } from '../records.ts';
 import { cancelDraftSave, saveRecord } from './data.ts';
 import { renderBank } from './bank.ts';
-import { renderPanel } from './panel.ts';
-import { showDonePage } from './task.ts';
+import { open } from './nav.ts';
+import { renderPanel, renderTabs, setStep } from './panel.ts';
+import { renderDone, showDonePage } from './task.ts';
 
 /** 批改结果：总分圆环、三项分数、译文里标出的问题、修改建议 */
 function fbHTML(a: Attempt): string {
@@ -122,18 +126,19 @@ export function step3HTML(): string {
   const draft = rec(cur.id)?.draft || '';
   const aiReady = usage ? usage.aiReady : true;
   const left = usage ? Math.max(0, usage.limits.grade - usage.grades) : null;
+  const grading = state.grading.has(cur.id);
+  const err = state.gradeErr[cur.id];
   let area = '';
-  if (state.grading) {
+  if (grading) {
     // 开着准确度提升时后台要评 5 次再汇总，告诉一声会慢一点
-    const boost = state.practiceCfg.accuracyBoost
-      ? '<span class="text-[12.5px] text-muted">准确度提升已开启，会多花一点时间</span>'
-      : '';
-    area = `<div class="flex flex-col gap-2 ${C.card} p-3.5"><div class="flex flex-wrap items-center justify-between gap-2"><span class="inline-flex items-center gap-2"><span class="${C.spin}"></span>AI 老师正在批改…</span>${boost}</div>
-      <div class="${C.shim}"></div><div class="${C.shim} w-[80%]"></div><div class="${C.shim} w-[55%]"></div></div>`;
-  } else if (state.gradeErr)
-    area = `<div class="rounded-xl bg-bad-soft px-3.5 py-2.5 text-[14px]">${esc(state.gradeErr)}</div>`;
+    const boost = state.practiceCfg.accuracyBoost ? '开着准确度提升，会多花一点时间。' : '';
+    const hasNext = state.sentences.length > 1;
+    area = `<div class="flex flex-col gap-2 ${C.card} p-3.5"><span class="inline-flex items-center gap-2"><span class="${C.spin}"></span>AI 老师正在批改…</span>
+      <div class="${C.shim}"></div><div class="${C.shim} w-[80%]"></div><div class="${C.shim} w-[55%]"></div>
+      <div class="flex flex-wrap items-center gap-x-3 gap-y-2 pt-1"><span class="min-w-0 flex-[1_1_220px] text-[13px] text-muted">${boost}不用在这里等，可以先去做别的句子，批改好了会在屏幕下方提醒你。</span>${hasNext ? `<button class="${C.btn}" data-act="next">先做下一句 →</button>` : ''}</div></div>`;
+  } else if (err) area = `<div class="rounded-xl bg-bad-soft px-3.5 py-2.5 text-[14px]">${esc(err)}</div>`;
   const last = lastAttempt(cur.id);
-  const fb = last && !state.grading ? fbHTML(last) : '';
+  const fb = last && !grading ? fbHTML(last) : '';
   const showQuiz = state.quizOpen || list.length > 0 || !!rec(cur.id)?.choice;
   let note = '';
   if (!aiReady) note = 'AI 模型还没配置。';
@@ -142,43 +147,94 @@ export function step3HTML(): string {
   else if (left != null) note = `今天还能批改 ${left} 次`;
   return `<label class="m-0" for="draft">先自己译一遍，AI 老师按准确、通顺、完整三项打分，并指出哪里要改、怎么改。</label>
     <textarea id="draft" maxlength="500" placeholder="在这里写你的中文译文……" class="min-h-24 w-full resize-y rounded-xl border-[1.5px] border-line bg-sheet px-3 py-2.5 text-[15.5px] outline-none transition-colors focus:border-accent">${esc(draft)}</textarea>
-    <div class="${C.row}"><button class="${C.btnPrimary}" data-act="grade" ${aiReady && !state.grading ? '' : 'disabled'}>${list.length ? '重新批改' : 'AI 批改'}</button>${showQuiz ? '' : `<button class="${C.btn}" data-act="skip">跳过，直接选译文</button>`}
+    <div class="${C.row}"><button class="${C.btnPrimary}" data-act="grade" ${aiReady && !grading ? '' : 'disabled'}>${list.length ? '重新批改' : 'AI 批改'}</button>${showQuiz ? '' : `<button class="${C.btn}" data-act="skip">跳过，直接选译文</button>`}
       <span class="text-[13px] text-muted">${esc(note)}</span>${aiReady ? '' : `<button class="cursor-pointer text-[13px] font-semibold text-accent underline underline-offset-4" data-act="gosettings">去设置模型</button>`}</div>
     ${area}${fb}
     ${showQuiz ? `<div class="flex items-center gap-2.5 text-[13px] text-muted before:h-px before:flex-1 before:bg-line after:h-px after:flex-1 after:bg-line">对照：选出最好的译文</div><div id="quiz" class="flex flex-col gap-3">${quizHTML()}</div>` : ''}`;
 }
 
-/** 交给 AI 批改 */
+/** 现在是不是正看着这一句的第 3 步（看着的话结果直接出现在面前，不用另外提醒） */
+const watching = (id: string): boolean =>
+  state.view === 'practice' && !state.showDone && state.cur?.id === id && state.step === 3 && !document.hidden;
+
+/** 重画面板时，正在译文框里打字的话，光标留在原来的位置 */
+function keepCaret(fn: () => void): void {
+  const el = document.activeElement;
+  const at = el instanceof HTMLTextAreaElement && el.id === 'draft' ? [el.selectionStart, el.selectionEnd] : null;
+  fn();
+  const ta = document.getElementById('draft');
+  if (at && ta instanceof HTMLTextAreaElement) {
+    ta.focus({ preventScroll: true });
+    ta.setSelectionRange(at[0] ?? 0, at[1] ?? 0);
+  }
+}
+
+/** 提醒里点“查看”：回到练习页、打开那一句的第 3 步 */
+export function showResult(id: string): void {
+  if (!state.sentences.some((s) => s.id === id)) return;
+  if (state.view !== 'practice') showView('practice');
+  if (state.cur?.id !== id) open(id);
+  else if (state.showDone) {
+    state.showDone = false;
+    renderDone(false);
+  }
+  if (state.step !== 3) setStep(3);
+  else renderPanel(false);
+  $('tabs').scrollIntoView({ block: 'start', behavior: 'smooth' });
+}
+
+/**
+ * 交给 AI 批改。批改在后台进行，这期间可以换到别的句子、别的页面；每句同时只批改一份。
+ * 批改好了：正看着这一句的第 3 步就直接显示结果（播分数动画），没在看就在屏幕下方提醒，句库圆点上留个小点。
+ */
 export async function grade(): Promise<void> {
+  const s = state.cur;
+  if (!s || state.grading.has(s.id)) return;
   const ta = document.getElementById('draft') as HTMLTextAreaElement | null;
   const text = (ta ? ta.value : '').trim();
   if (!text) {
-    state.gradeErr = '先写下你的译文再批改。';
+    state.gradeErr[s.id] = '先写下你的译文再批改。';
     renderPanel(false);
     return;
   }
-  const s = state.cur;
-  if (state.grading || !s) return;
   cancelDraftSave();
   saveRecord(s.id, { draft: text });
-  state.grading = true;
-  state.gradeErr = '';
+  state.grading.add(s.id);
+  delete state.gradeErr[s.id];
+  state.gradeUnseen.delete(s.id);
   renderPanel(false);
+  renderTabs();
+  renderBank();
+  let note = '';
+  let ok = false;
   try {
     const r = await api.grade(s.id, text);
     state.attempts[s.id] = [r.attempt, ...atts(s.id)];
     if (state.usage) state.usage.grades += 1;
-    if (state.cur === s) {
-      state.freshFb = true;
-      state.quizOpen = true;
-    }
+    if (state.cur === s) state.quizOpen = true;
+    note = `批改好了：${r.attempt.total ?? 0} 分`;
+    ok = true;
   } catch (e) {
-    if (state.cur === s) state.gradeErr = (e as Error).message;
+    state.gradeErr[s.id] = (e as Error).message;
+    note = `没批改成：${(e as Error).message}`;
   } finally {
-    state.grading = false;
-    if (state.cur === s) renderPanel(false);
-    renderBank();
+    state.grading.delete(s.id);
   }
+  const no = state.sentences.indexOf(s) + 1;
+  if (!no) return; // 批改期间这一句被删掉了
+  if (watching(s.id)) {
+    if (ok) state.freshFb = true;
+  } else {
+    if (ok) state.gradeUnseen.add(s.id);
+    toast(`第 ${no} 句${note}`, { label: '查看', fn: () => showResult(s.id) });
+  }
+  // 停在这一句时更新步骤标签（第 3 步上的小圈），在第 3 步就把结果画出来；在记录页时把新的批改加进去
+  if (state.cur === s && state.view === 'practice') {
+    renderTabs();
+    if (state.step === 3) keepCaret(() => renderPanel(false));
+  }
+  if (state.view === 'records') renderRecords();
+  renderBank();
 }
 
 /** 选了一个译文：记下来，选对了这句就算完成 */

@@ -8,6 +8,7 @@ import { esc } from '../lib/format.ts';
 import * as speech from '../lib/speech.ts';
 import { C, ICON, ROLE_CLS } from '../styles.ts';
 import { state } from '../state.ts';
+import { renderBank } from './bank.ts';
 import { showView } from '../views.ts';
 import { saveDraft, saveRecord } from './data.ts';
 import { fixHTML, saveFix } from './fix.ts';
@@ -20,6 +21,9 @@ import { grade, pickOption, retryQuiz, step3HTML } from './translate.ts';
 export function renderTabs(): void {
   A.moveIndicator($('tabInd'), state.step - 1);
   all('#tabs [data-s]').forEach((b) => b.setAttribute('aria-selected', String(Number(b.dataset.s) === state.step)));
+  // 这一句正在批改：第 3 步的标签上转个小圈（在第 1、2 步时也看得到）
+  const busy = !!state.cur && state.grading.has(state.cur.id);
+  $('tabSpin').classList.toggle('hidden', !busy);
   ['tabs', 'nav', 'panel'].forEach((id) => $(id).classList.toggle('hidden', !state.cur));
 }
 
@@ -118,6 +122,8 @@ export function renderPanel(enter: boolean): void {
   }
   p.innerHTML = state.step === 1 ? step1HTML() : state.step === 2 ? step2HTML() : step3HTML();
   if (enter) A.enter(p.children);
+  // 看到了后台批改好的结果：句库圆点上的小点去掉
+  if (state.step === 3 && state.view === 'practice' && state.gradeUnseen.delete(state.cur.id)) renderBank();
   if (state.step === 3 && state.freshFb) {
     state.freshFb = false;
     A.score(p.querySelector('[data-fb]'));
