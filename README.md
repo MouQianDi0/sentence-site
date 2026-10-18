@@ -45,7 +45,7 @@ cd /opt/sentence-site && sudo docker compose up -d --build
 
 ## 访问
 
-开了 HTTPS 以后打开 `https://服务器IP:8443`（还没开时是 `http://服务器IP:端口`，端口是 `.env` 里的 `WEB_PORT`），输入访问密码。练习、记录、设置各有自己的地址：`/practice`、`/records`、`/settings`（邀请码管理是 `/settings/invites`，Token 用量是 `/settings/usage`），刷新或收藏都会停在那一页；直接打开首页会回到上次停留的那一页。忘了密码可以看：
+开了 HTTPS 以后打开 `https://cet.tech-mou.top`（用 IP 开 HTTPS 时是 `https://服务器IP:8443`；还没开时是 `http://服务器IP:端口`，端口是 `.env` 里的 `WEB_PORT`），输入访问密码。练习、记录、设置各有自己的地址：`/practice`、`/records`、`/settings`（邀请码管理是 `/settings/invites`，Token 用量是 `/settings/usage`），刷新或收藏都会停在那一页；直接打开首页会回到上次停留的那一页。忘了密码可以看：
 
 ```bash
 sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
@@ -58,10 +58,16 @@ sudo grep ACCESS_PASSWORD /opt/sentence-site/.env
 ```bash
 sudo bash scripts/enable-https.sh                    # 用公网 IP：https://公网IP:8443
 sudo bash scripts/enable-https.sh --port 8444        # 换个 HTTPS 端口（443 没被别的网站占着时可以 --port 443，网址就不用带端口）
-sudo bash scripts/enable-https.sh cet.example.com    # 以后有了备案好的域名就换成域名（会再申请一张域名证书）
+sudo bash scripts/enable-https.sh cet.tech-mou.top --port 443  # 换成备案好的域名，用 443，网址不带端口
 sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 http://公网IP:8080
 ```
 
+- 换成域名（现在用的是 `cet.tech-mou.top`）：
+  1. 先在 DNS 解析里加一条 A 记录，把域名指到这台服务器的公网 IP；脚本会先检查解析，没解析好就停下来说明。
+  2. 运行 `sudo bash scripts/enable-https.sh 域名 --port 443`。用域名时可以和服务器上原来的网站共用 443：Nginx 按域名分开，不抢原来网站的默认网站，用 IP 或别的域名访问 443 还是原来的网站。
+  3. 脚本申请好域名证书后，会停掉原来 IP 证书的续期（两张证书装在同一个位置，不停的话 IP 证书续期时会把域名证书覆盖掉），并删掉 IP 模式的钩子。以前的 `https://IP:8443` 不再能用，`http://IP:8080` 跳到 `https://域名`。新证书没申请成功时什么都不动，原来的网址照旧能用。
+  4. 登录状态按网址分开，换域名后要重新登录一次；邀请用户也要改用新网址。
+  5. 服务器在国内，域名要备案（已备案域名下的二级域名一般包含在原备案里）。
 - 还没有备案的域名时用 IP 证书：Let's Encrypt 的 IP 证书每张只有 6 天，acme.sh 每天检查一次、满 3 天就续，不用管。
 - 腾讯云防火墙要放行 HTTPS 端口（默认 TCP 8443）；TCP 80 也要一直开着，申请和续期证书时 Let's Encrypt 只会从外网访问 80 端口。
 - 端口记在 `.env` 的 `HTTPS_PORT` 里，以后重新运行脚本沿用；换端口不用重新申请证书。

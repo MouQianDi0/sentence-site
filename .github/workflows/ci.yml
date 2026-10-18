@@ -126,7 +126,7 @@ jobs:
           d="$RUNNER_TEMP/https"
           mkdir -p "$d"
           openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 6 -subj '/CN=127.0.0.1' \
-            -addext 'subjectAltName=IP:127.0.0.1' -keyout "$d/key.pem" -out "$d/fullchain.pem" 2>/dev/null
+            -addext 'subjectAltName=IP:127.0.0.1,DNS:ci.test' -keyout "$d/key.pem" -out "$d/fullchain.pem" 2>/dev/null
           sudo cp "$d/fullchain.pem" /usr/local/share/ca-certificates/sentence-ci.crt
           sudo update-ca-certificates >/dev/null
           sudo mkdir -p /root/.acme.sh
@@ -152,7 +152,7 @@ jobs:
             shift
           done
           if [ -n "$issue" ]; then
-            [ -f /root/.acme.sh/issued ] && [ -z "$force" ] && exit 2
+            [ -f "/root/.acme.sh/issued-$host" ] && [ -z "$force" ] && exit 2
             mkdir -p "/root/.acme.sh/${host}_ecc"
             b64() { [ -n "$1" ] && printf '__ACME_BASE64__START_%s__ACME_BASE64__END_' "$(printf '%s' "$1" | openssl base64 -e | tr -d '\r\n')"; }
             printf "Le_Domain='%s'\nLe_PreHook='%s'\nLe_PostHook='%s'\n" "$host" "$(b64 "$pre")" "$(b64 "$post")" \
@@ -164,7 +164,7 @@ jobs:
             rm -f "/var/www/acme/.well-known/acme-challenge/$t"
             if [ -n "$post" ]; then eval "$post" || echo "acme: post-hook 失败"; fi
             [ "$got" = "$t" ] || { echo "acme: 验证文件取不到：$got"; exit 1; }
-            touch /root/.acme.sh/issued
+            touch "/root/.acme.sh/issued-$host"
             echo issued >> /root/.acme.sh/calls.log
           fi
           if [ -n "$install" ]; then
@@ -237,6 +237,25 @@ jobs:
           # 再运行一次：钩子已经记上，不用重新申请
           sudo bash scripts/enable-https.sh | tee "$d/out"
           grep -q '不用重新申请' "$d/out"
+
+          # 从 IP 换成域名、用 443（网址不带端口）。ci.test 写进 hosts，测试证书里也有这个域名。
+          # 申请好域名证书后停掉 IP 证书的续期，钩子和临时配置删掉；http://域名 跳到 https，
+          # http://IP 照旧是原来的网站，以前的 8080 跳到新地址，8444 不再用
+          echo '127.0.0.1 ci.test' | sudo tee -a /etc/hosts >/dev/null
+          sudo bash scripts/enable-https.sh ci.test --port 443 | tee "$d/out"
+          grep -q '已停止旧地址 127.0.0.1 的证书续期' "$d/out"
+          sudo grep -q -- '--remove -d 127.0.0.1 --ecc' /root/.acme.sh/calls.log
+          [[ $(sudo grep -- '--issue' /root/.acme.sh/calls.log | tail -n 1) == *'-d ci.test'* ]]
+          sudo test ! -e "$hook"
+          [ -z "$(tmpconf)" ]
+          curl -fsS https://ci.test/api/health | grep -q '"db":true'
+          [ "$(redir http://ci.test/)" = "301 https://ci.test/" ]
+          [ "$(redir 'http://ci.test:443/y?z=1')" = "301 https://ci.test/y?z=1" ]
+          [ "$(redir http://127.0.0.1:8080/x)" = "301 https://ci.test/x" ]
+          if curl -s -m 3 -o /dev/null https://127.0.0.1:8444/; then echo "::error::8444 还在用"; exit 1; fi
+          [ "$(curl -fsS http://127.0.0.1/)" = "$before" ]
+          grep -q '^HTTPS_HOST=ci.test$' .env
+          grep -q '^HTTPS_PORT=443$' .env
 
           # 撤掉：回到 http://IP:8080
           sudo bash scripts/enable-https.sh --off

@@ -6,6 +6,9 @@
 #   sudo bash scripts/enable-https.sh --port 8444        换一个 HTTPS 端口（记在 .env 的 HTTPS_PORT 里，以后重新运行沿用）
 #   sudo bash scripts/enable-https.sh --port 443         用标准端口，网址里就不用写端口了
 #   sudo bash scripts/enable-https.sh cet.example.com    以后有了备案好的域名（普通证书，90 天有效，自动续期）
+#   sudo bash scripts/enable-https.sh cet.example.com --port 443
+#                                                        域名用 443，网址不带端口（按域名区分，和原来的网站共用 443）
+#                                                        从 IP 换成域名时，新证书装好后会停掉 IP 证书的续期
 #   sudo bash scripts/enable-https.sh --off              撤掉 HTTPS，回到原来的 http://公网IP:8080
 #
 # 做的事：
@@ -315,6 +318,23 @@ HOST=${HOST,,}
 if is_ipv4 "$HOST"; then MODE=ip; else MODE=domain; fi
 [[ $MODE == ip || $HOST =~ ^[a-z0-9.-]+\.[a-z]{2,}$ ]] || die "“$HOST”不像 IP 也不像域名"
 
+# 上次开 HTTPS 用的地址。换了地址（比如从 IP 换成域名）时，现有的证书不是这个地址的，要当作还没有证书
+PREV_HOST=$(env_get HTTPS_HOST)
+HAVE_CERT=""
+if [[ -s $SSL_DIR/fullchain.pem && $PREV_HOST == "$HOST" ]]; then HAVE_CERT=1; fi
+[[ -n $PREV_HOST && $PREV_HOST != "$HOST" ]] && log "地址从 $PREV_HOST 换成 $HOST：申请好新证书后，停掉 $PREV_HOST 的证书续期"
+
+# 用域名时先看域名有没有解析到这台服务器，没解析好 Let's Encrypt 验证不了
+if [[ $MODE == domain ]]; then
+  pub=$(curl -s -m 3 http://metadata.tencentyun.com/latest/meta-data/public-ipv4 || true)
+  addrs=$(getent ahostsv4 "$HOST" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ' || true)
+  [[ -n ${addrs// /} ]] \
+    || die "域名 $HOST 还没有解析（查不到 IP）。先在 DNS 解析里加一条 A 记录指向这台服务器${pub:+（$pub）}，生效后再运行"
+  if [[ -n $pub ]] && ! grep -qw -- "$pub" <<<"$addrs"; then
+    die "域名 $HOST 解析到的是 ${addrs% }，不是这台服务器的 $pub。改好 DNS 解析、等它生效后再运行"
+  fi
+fi
+
 CUR_PORT=$(env_get WEB_PORT)
 CUR_PORT=${CUR_PORT:-80}
 CUR_BIND=$(env_get WEB_BIND)
@@ -384,7 +404,7 @@ if [[ $MODE == ip ]]; then
   "$HOOK" on >/dev/null || { restore; die "Nginx 配置检查没通过，已经恢复原样（上面是 nginx -t 的输出）"; }
   READ_CONF=$ACME_CONF
 else
-  if [[ ! -s $SSL_DIR/fullchain.pem ]]; then
+  if [[ -z $HAVE_CERT ]]; then
     render_http "$HOST" "$CUR_PORT" > "$CONF"
     reload_nginx || { restore; die "Nginx 配置检查没通过，已经恢复原样"; }
   fi
@@ -434,7 +454,7 @@ if [[ $MODE == ip ]]; then
   args+=(--cert-profile shortlived --days 3 --pre-hook "$HOOK on" --post-hook "$HOOK off")
   # acme.sh 只在真的去申请时才把钩子记下来，证书没到期时直接跳过。以前申请的证书没记钩子（或者记的不是这个），
   # 续期时 80 端口上就没有验证路径了，所以强制重新申请一次，把钩子记进去
-  if [[ $(saved_pre_hook) != "$HOOK on" && -s $SSL_DIR/fullchain.pem ]]; then
+  if [[ $(saved_pre_hook) != "$HOOK on" && -n $HAVE_CERT ]]; then
     log "证书的续期设置里还没有临时打开 80 端口的钩子，重新申请一次把它记上"
     args+=(--force)
   fi
@@ -451,7 +471,8 @@ fi
 if [[ $rc -eq 2 ]]; then
   log "证书还没到续期时间，不用重新申请"
 elif [[ $rc -ne 0 ]]; then
-  [[ -s $SSL_DIR/fullchain.pem ]] || restore
+  # 这个地址原来就有证书：配置没动过，照旧能用；新地址申请失败：恢复成原来的配置（换地址前的网址照旧能用）
+  [[ -n $HAVE_CERT ]] || restore
   die "申请证书失败。最常见的原因：腾讯云防火墙没放行 TCP 80（Let's Encrypt 要从外网访问 http://$HOST/.well-known/…）。看上面的输出，或者把它发给 Claude"
 fi
 
@@ -460,6 +481,14 @@ fi
   --fullchain-file "$SSL_DIR/fullchain.pem" \
   --reloadcmd "systemctl reload nginx" >/dev/null
 chmod 600 "$SSL_DIR/key.pem"
+# 换了地址：旧地址的证书装在同一个位置，要是还在续期，续期时会把新证书覆盖掉，所以停掉它的续期
+# （acme.sh --remove 只是不再续期，证书文件还留在 acme.sh 的目录里）
+if [[ -n $PREV_HOST && $PREV_HOST != "$HOST" ]]; then
+  "$ACME" --home "$ACME_HOME" --remove -d "$PREV_HOST" --ecc >/dev/null 2>&1 || true
+  log "已停止旧地址 $PREV_HOST 的证书续期"
+fi
+# 用域名时用不到 IP 模式的钩子和临时配置
+[[ $MODE == domain ]] && rm -f "$HOOK" "$ACME_CONF"
 log "证书已装好：$(openssl x509 -noout -enddate -in "$SSL_DIR/fullchain.pem" | cut -d= -f2) 到期，会自动续"
 
 # ---- 4. 网站容器改成只在本机监听，打开 COOKIE_SECURE ------------------------------------
