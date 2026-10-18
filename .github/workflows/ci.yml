@@ -121,7 +121,8 @@ jobs:
           set -x
           command -v nginx >/dev/null || { sudo apt-get update -q && sudo apt-get install -y -q nginx; }
           sudo systemctl start nginx
-          curl -fsS -o /dev/null http://127.0.0.1/
+          # 服务器上原来的网站（这里是 Nginx 自带的默认页）：开了 HTTPS 以后 http://IP 还应该是它
+          before=$(curl -fsS http://127.0.0.1/)
           d="$RUNNER_TEMP/https"
           mkdir -p "$d"
           openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes -days 6 -subj '/CN=127.0.0.1' \
@@ -131,28 +132,45 @@ jobs:
           sudo mkdir -p /root/.acme.sh
           sudo cp "$d/key.pem" /root/.acme.sh/ci-key.pem
           sudo cp "$d/fullchain.pem" /root/.acme.sh/ci-fullchain.pem
+          # 和真的 acme.sh 一样：没到期（没加 --force）就跳过、不记钩子；真去申请时先记下钩子，
+          # 申请前运行 pre-hook，申请完（成功失败都）运行 post-hook；钩子记在 <域名>_ecc/<域名>.conf（base64）
           sudo tee /root/.acme.sh/acme.sh >/dev/null <<'ACME'
           #!/bin/bash
           echo "$*" >> /root/.acme.sh/calls.log
-          case " $* " in
-            *" --issue "*)
-              [ -f /root/.acme.sh/issued ] && exit 2
-              host=$(sed -E 's/.* -d ([^ ]+).*/\1/' <<<"$*")
-              t=ci-$RANDOM$RANDOM
-              echo "$t" > "/var/www/acme/.well-known/acme-challenge/$t"
-              got=$(curl -s -H "Host: $host" "http://127.0.0.1/.well-known/acme-challenge/$t")
-              rm -f "/var/www/acme/.well-known/acme-challenge/$t"
-              [ "$got" = "$t" ] || { echo "acme: 验证文件取不到：$got"; exit 1; }
-              touch /root/.acme.sh/issued ;;
-            *" --install-cert "*)
-              while [ $# -gt 0 ]; do
-                case $1 in
-                  --key-file) cp /root/.acme.sh/ci-key.pem "$2" ;;
-                  --fullchain-file) cp /root/.acme.sh/ci-fullchain.pem "$2" ;;
-                esac
-                shift
-              done ;;
-          esac
+          issue="" install="" force="" pre="" post="" host="" key="" chain=""
+          while [ $# -gt 0 ]; do
+            case $1 in
+              --issue) issue=1 ;;
+              --install-cert) install=1 ;;
+              --force) force=1 ;;
+              --pre-hook) pre=$2; shift ;;
+              --post-hook) post=$2; shift ;;
+              -d) host=$2; shift ;;
+              --key-file) key=$2; shift ;;
+              --fullchain-file) chain=$2; shift ;;
+            esac
+            shift
+          done
+          if [ -n "$issue" ]; then
+            [ -f /root/.acme.sh/issued ] && [ -z "$force" ] && exit 2
+            mkdir -p "/root/.acme.sh/${host}_ecc"
+            b64() { [ -n "$1" ] && printf '__ACME_BASE64__START_%s__ACME_BASE64__END_' "$(printf '%s' "$1" | openssl base64 -e | tr -d '\r\n')"; }
+            printf "Le_Domain='%s'\nLe_PreHook='%s'\nLe_PostHook='%s'\n" "$host" "$(b64 "$pre")" "$(b64 "$post")" \
+              > "/root/.acme.sh/${host}_ecc/${host}.conf"
+            if [ -n "$pre" ]; then eval "$pre" || { echo "acme: pre-hook 失败"; exit 1; }; fi
+            t=ci-$RANDOM$RANDOM
+            echo "$t" > "/var/www/acme/.well-known/acme-challenge/$t"
+            got=$(curl -s -H "Host: $host" "http://127.0.0.1/.well-known/acme-challenge/$t")
+            rm -f "/var/www/acme/.well-known/acme-challenge/$t"
+            if [ -n "$post" ]; then eval "$post" || echo "acme: post-hook 失败"; fi
+            [ "$got" = "$t" ] || { echo "acme: 验证文件取不到：$got"; exit 1; }
+            touch /root/.acme.sh/issued
+            echo issued >> /root/.acme.sh/calls.log
+          fi
+          if [ -n "$install" ]; then
+            cp /root/.acme.sh/ci-key.pem "$key"
+            cp /root/.acme.sh/ci-fullchain.pem "$chain"
+          fi
           exit 0
           ACME
           sudo chmod +x /root/.acme.sh/acme.sh
@@ -160,11 +178,26 @@ jobs:
           # 第一次开：默认 8443
           sudo bash scripts/enable-https.sh 127.0.0.1
           sudo grep -q -- '--cert-profile shortlived' /root/.acme.sh/calls.log
+          hook=/etc/nginx/ssl/sentence-site/acme-hook.sh
+          sudo grep -qF -- "--pre-hook $hook on --post-hook $hook off" /root/.acme.sh/calls.log
           u=https://127.0.0.1:8443
           curl -fsS $u/api/health | grep -q '"db":true'
-          # http://IP、以前的 http://IP:8080、用 http:// 打开 8443，都跳到 https://IP:8443；原来的网站不受影响
+          # 只输 IP（http://IP）不跳转，还是原来的网站；申请证书用的临时配置已经删掉
           redir() { curl -s -o /dev/null -w '%{http_code} %{redirect_url}' "$1"; }
-          [ "$(redir http://127.0.0.1/)" = "301 $u/" ]
+          [ "$(redir http://127.0.0.1/)" = "200 " ]
+          [ "$(curl -fsS http://127.0.0.1/)" = "$before" ]
+          tmpconf() { sudo ls /etc/nginx/conf.d/sentence-site-acme.conf /etc/nginx/sites-enabled/sentence-site-acme.conf 2>/dev/null || true; }
+          [ -z "$(tmpconf)" ]
+          # 续期时：钩子打开后 80 端口能取到验证文件，关掉后 http://IP 回到原来的网站
+          sudo "$hook" on
+          [ -n "$(tmpconf)" ]
+          echo ci-renew | sudo tee /var/www/acme/.well-known/acme-challenge/ci-renew >/dev/null
+          [ "$(curl -s -H 'Host: 127.0.0.1' http://127.0.0.1/.well-known/acme-challenge/ci-renew)" = ci-renew ]
+          sudo rm -f /var/www/acme/.well-known/acme-challenge/ci-renew
+          sudo "$hook" off
+          [ -z "$(tmpconf)" ]
+          [ "$(curl -fsS http://127.0.0.1/)" = "$before" ]
+          # 以前的 http://IP:8080、用 http:// 打开 8443，都跳到 https://IP:8443；原来的网站不受影响
           [ "$(redir http://127.0.0.1:8080/x)" = "301 $u/x" ]
           [ "$(redir 'http://127.0.0.1:8443/y?z=1')" = "301 $u/y?z=1" ]
           [ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Host: other.test' http://127.0.0.1/)" = 200 ]
@@ -190,12 +223,28 @@ jobs:
           curl -fsS https://127.0.0.1:8444/api/health | grep -q '"db":true'
           if curl -s -m 3 -o /dev/null https://127.0.0.1:8443/; then echo "::error::8443 还在用"; exit 1; fi
           [ "$(redir http://127.0.0.1:8080/x)" = "301 https://127.0.0.1:8444/x" ]
+          [ "$(curl -fsS http://127.0.0.1/)" = "$before" ]
+
+          # 以前（这次改动之前）申请的证书没记钩子：重新运行时强制重新申请一次，把钩子记上
+          printf "Le_Domain='127.0.0.1'\nLe_PreHook=''\nLe_PostHook=''\n" | sudo tee /root/.acme.sh/127.0.0.1_ecc/127.0.0.1.conf >/dev/null
+          sudo bash scripts/enable-https.sh | tee "$d/out"
+          grep -q '重新申请一次' "$d/out"
+          [[ $(sudo grep -- '--issue' /root/.acme.sh/calls.log | tail -n 1) == *--force* ]]
+          sudo grep -q "^Le_PreHook='__ACME_BASE64__START_" /root/.acme.sh/127.0.0.1_ecc/127.0.0.1.conf
+          [ -z "$(tmpconf)" ]
+          curl -fsS https://127.0.0.1:8444/api/health | grep -q '"db":true'
+          [ "$(curl -fsS http://127.0.0.1/)" = "$before" ]
+          # 再运行一次：钩子已经记上，不用重新申请
+          sudo bash scripts/enable-https.sh | tee "$d/out"
+          grep -q '不用重新申请' "$d/out"
 
           # 撤掉：回到 http://IP:8080
           sudo bash scripts/enable-https.sh --off
           curl -fsS http://127.0.0.1:8080/api/health | grep -q '"db":true'
           [ ! -e /etc/nginx/conf.d/sentence-site.conf ]
           [ ! -e /etc/nginx/sites-enabled/sentence-site.conf ]
+          [ -z "$(tmpconf)" ]
+          sudo test ! -e "$hook"
           grep -q '^COOKIE_SECURE=0$' .env
       - name: 出错时打印日志
         if: failure()

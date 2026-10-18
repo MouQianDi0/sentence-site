@@ -65,8 +65,10 @@ sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 htt
 - 还没有备案的域名时用 IP 证书：Let's Encrypt 的 IP 证书每张只有 6 天，acme.sh 每天检查一次、满 3 天就续，不用管。
 - 腾讯云防火墙要放行 HTTPS 端口（默认 TCP 8443）；TCP 80 也要一直开着，申请和续期证书时 Let's Encrypt 只会从外网访问 80 端口。
 - 端口记在 `.env` 的 `HTTPS_PORT` 里，以后重新运行脚本沿用；换端口不用重新申请证书。
-- 开了之后 `http://IP`、以前的 `http://IP:8080`、用 `http://` 打开 HTTPS 端口，都会跳到 https；网站容器改成只在本机 8081 端口监听（`.env` 里的 `WEB_BIND=127.0.0.1`、`WEB_PORT=8081`），`COOKIE_SECURE=1` 让登录状态只走 HTTPS。
-- 脚本只加一份自己的 Nginx 配置（`/etc/nginx/conf.d/sentence-site.conf`），服务器上原来的网站不受影响。可以重复运行，证书没到续期时间不会重新申请。
+- 开了之后以前的 `http://IP:8080`、用 `http://` 打开 HTTPS 端口，都会跳到 https；网站容器改成只在本机 8081 端口监听（`.env` 里的 `WEB_BIND=127.0.0.1`、`WEB_PORT=8081`），`COOKIE_SECURE=1` 让登录状态只走 HTTPS。
+- 只输 IP 不加端口（`http://IP`）**不跳转**，照旧是服务器上原来的网站：80 端口平时不放这个网站的配置，只在 acme.sh 申请或续期证书的那几秒，由钩子 `/etc/nginx/ssl/sentence-site/acme-hook.sh` 临时加上验证文件的路径（`sentence-site-acme.conf`），用完就删；这几秒里 `http://IP` 的其他地址会返回 404。用域名时 `http://域名` 照常跳到 https。
+- 从旧版本更新过来（以前 `http://IP` 会跳到 8443）：`sudo sentence-update` 后再运行一次 `sudo bash scripts/enable-https.sh`。旧证书的续期设置里还没有那个钩子，脚本会强制重新申请一次证书把它记上，之后就不用管了。
+- 脚本只加自己的 Nginx 配置（`/etc/nginx/conf.d/sentence-site.conf`，用 IP 时续期那几秒还有 `sentence-site-acme.conf`），服务器上原来的网站不受影响。可以重复运行，证书没到续期时间不会重新申请。
 - 看证书什么时候到期：`sudo openssl x509 -noout -enddate -in /etc/nginx/ssl/sentence-site/fullchain.pem`
 
 第一次启动时，数据库里还没有句子，api 会自动导入旧版页面导出的句子和练习记录（`api/seed/export.json`）。
