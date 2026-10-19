@@ -41,7 +41,7 @@ const BUSY_WORDS: Record<Exclude<Busy, ''>, string> = {
 };
 type Result = { kind: 'ok' | 'err'; text: string } | ({ kind: 'test' } & LlmTestResult);
 
-// 模型名会随平台更新，这里只是起点；可以点“获取模型列表”拿到平台当前提供的。id 和后端 settings.js 的 PROVIDERS 一致
+// 模型名会随平台更新，这里只是起点；可以点“获取模型列表”拿到平台当前提供的。id 和后端 settings.ts 的 PROVIDERS 一致
 // keyUrl：各平台创建 API Key 的页面（登录后才能看到），keySite：链接上显示的平台名
 const PRESETS: Preset[] = [
   {
