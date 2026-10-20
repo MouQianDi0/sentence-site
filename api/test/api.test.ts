@@ -628,7 +628,14 @@ test('加练：四六级混合，超过 5 句分两次请求，句子打乱顺�
   const prompts = calls.filter((p) => !p.includes('逐句核对句子里'));
   assert.equal(prompts.length, 2);
   assert.equal(calls.length - prompts.length, 2, '每批出题后各复核一次');
-  assert.match(prompts[0] ?? '', /按顺序出：第 1 句 CET-[46](，第 \d 句 CET-[46]){4}。/);
+  // 两批同时请求，到达假模型的先后不固定，只看两批的句数
+  const batchSizes = prompts.map(
+    (p) => /按顺序出：(第 \d 句 CET-[46][，。])+/.exec(p)?.[0].match(/第 \d 句/g)?.length ?? 0,
+  );
+  assert.deepEqual(
+    batchSizes.sort((a, b) => a - b),
+    [2, 5],
+  );
   const all = (await app.api('GET', '/api/sentences')).body.sentences;
   const added = all.filter((s: Sentence) => r.body.added.includes(s.id));
   const four = added.filter((s: Sentence) => s.level === 'CET-4').length;
