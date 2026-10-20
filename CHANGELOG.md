@@ -2,6 +2,28 @@
 
 所有代码变更都记在这里，新的在最上面。时间是北京时间。
 
+## 2026-10-21 02:09:11
+
+**变更类型**：新功能（数据库）
+
+**变更概述**：数据库改进第 5 步（一）：外部题库的表和导入。新增 `banks`、`bank_items` 两张表和 `sentences.bank_item_id`（可空），从服务器上的 JSONL 文件导入四级真题阅读长难句。只加表、加可空列，上一版代码跑在新库上照常能用。题库文件和真题原句不进仓库，测试用自己编的假数据。
+
+**修改的文件**
+
+- 新增 `api/src/migrations/0005_bank.sql`、`api/src/bank.ts`、`api/scripts/import-bank.ts`、`api/test/bank.test.ts`
+- 修改 `api/src/repo.ts`
+- 修改 `api/test/helpers.ts`、`api/test/migrate.test.ts`
+- 修改 `README.md`、`CHANGELOG.md`
+
+**具体内容**
+
+- `banks`：一个题库一行（现在只有 `cet4-reading`“四级真题阅读长难句”），可以停用。`bank_items`：题库里的一句，按 `(bank_id, external_id)` 唯一；状态 review / raw / ready / rejected / retired，ready 必须有拆解（`body`）。`sentences.bank_item_id` 记账户复制的这句来自题库哪一句，`(account_id, bank_item_id)` 唯一，题库里的句子删掉时置空。
+- `scripts/import-bank.ts` 从标准输入读 JSONL，`repo.importBank` 用一条语句（`jsonb_to_recordset` + `ON CONFLICT`）写入，同一条语句把文件里没有的标成 retired，整份要么都写进去、要么都不写；导入后打印各状态句数。
+- 字段：`id` → `external_id`，`text_en` → `text`，第一个出处的年、月、套、Section → `exam_year`、`exam_month`、`paper`、`section`，`structures` → `tags`，`complexity_score` → `complexity`，`quality_status` → `src_quality`；`text_raw`、`cloze`、`text_source` 和全部出处（含篇章、位置、文件名）放 `meta`。
+- 初筛：reviewed、cloze_filled → raw；incomplete_cloze → rejected；其余 → review。再次导入：原文没变保留改过的原文、拆解和状态（retired 的恢复）；原文变了清掉拆解和改过的原文，按新的质量状态重新初筛。
+- 测试辅助：psql 替身支持带写入的 `WITH` 语句。
+- 测试：0005 可重复执行，上一版代码写句子不受影响；导入新增、更新、下架、原文变了退回、下架后恢复；有一句写不进去时整份不生效。
+
 ## 2026-10-21 01:13:06
 
 **变更类型**：重构（数据库）

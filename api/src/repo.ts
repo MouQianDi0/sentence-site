@@ -11,6 +11,7 @@ import type {
   Seg,
 } from '@sentence-site/shared';
 import { query } from './db.ts';
+import { BANK_STATUSES, type BankRow, type BankStatus } from './bank.ts';
 
 /** accounts 表的一行 */
 export interface AccountRow {
@@ -607,4 +608,83 @@ export async function deleteDevice(accountId: string, deviceId: string): Promise
     deviceId,
   ]);
   return rowCount > 0;
+}
+
+// ---- 外部题库（全站一份，只有 owner 能导入、管理）----------------------------------
+/** 各状态的句数 */
+export type BankCounts = Record<BankStatus, number>;
+
+export interface BankImportResult {
+  added: number;
+  updated: number;
+  retired: number;
+}
+
+/**
+ * 导入一份题库：一条语句写完，整份要么都写进去，要么都不写。
+ * - 新编号：按初筛的状态写入。
+ * - 已有编号：更新出处、标签、质量状态；原文变了就清掉拆解和改过的原文，按新的质量状态重新初筛；
+ *   原文没变时保留改过的原文、拆解和状态（上次导入时不在文件里、标成 retired 的恢复回来）。
+ * - 这次文件里没有的标成 retired（账户已经抽走的那份不受影响）。
+ */
+export async function importBank(bank: { id: string; name: string }, rows: BankRow[]): Promise<BankImportResult> {
+  const { rows: out } = await query<BankImportResult>(
+    `WITH bank AS (
+       INSERT INTO banks (id, name, imported_at) VALUES ($1, $2, now())
+       ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, imported_at = now()
+       RETURNING id
+     ),
+     src AS (
+       SELECT * FROM jsonb_to_recordset($3::jsonb) AS x(
+         external_id text, text text, level text, exam_year smallint, exam_month smallint, paper smallint,
+         section text, tags text[], complexity smallint, src_quality text, meta jsonb, status text, reject_reason text)
+     ),
+     up AS (
+       INSERT INTO bank_items AS b (bank_id, external_id, text, level, exam_year, exam_month, paper, section,
+                                    tags, complexity, src_quality, meta, status, reject_reason)
+       SELECT $1, external_id, text, level, exam_year, exam_month, paper, section,
+              coalesce(tags, '{}'), complexity, src_quality, coalesce(meta, '{}'), status, reject_reason
+       FROM src
+       ON CONFLICT (bank_id, external_id) DO UPDATE SET
+         level = EXCLUDED.level, exam_year = EXCLUDED.exam_year, exam_month = EXCLUDED.exam_month,
+         paper = EXCLUDED.paper, section = EXCLUDED.section, tags = EXCLUDED.tags,
+         complexity = EXCLUDED.complexity, src_quality = EXCLUDED.src_quality, meta = EXCLUDED.meta,
+         text = EXCLUDED.text,
+         text_fix = CASE WHEN b.text = EXCLUDED.text THEN b.text_fix END,
+         body = CASE WHEN b.text = EXCLUDED.text THEN b.body END,
+         annotated_by = CASE WHEN b.text = EXCLUDED.text THEN b.annotated_by END,
+         status = CASE
+           WHEN b.text <> EXCLUDED.text THEN EXCLUDED.status
+           WHEN b.status <> 'retired' THEN b.status
+           WHEN b.reject_reason IS NOT NULL THEN 'rejected'
+           WHEN b.body IS NOT NULL THEN 'ready'
+           ELSE EXCLUDED.status END,
+         reject_reason = CASE WHEN b.text = EXCLUDED.text THEN b.reject_reason ELSE EXCLUDED.reject_reason END,
+         updated_at = now()
+       RETURNING (xmax = 0) AS inserted
+     ),
+     gone AS (
+       UPDATE bank_items b SET status = 'retired', updated_at = now()
+       WHERE b.bank_id = $1 AND b.status <> 'retired'
+         AND NOT EXISTS (SELECT 1 FROM src WHERE src.external_id = b.external_id)
+       RETURNING 1
+     )
+     SELECT (SELECT count(*) FROM up WHERE inserted)::int AS added,
+            (SELECT count(*) FROM up WHERE NOT inserted)::int AS updated,
+            (SELECT count(*) FROM gone)::int AS retired`,
+    [bank.id, bank.name, json(rows)],
+  );
+  const r = out[0];
+  return { added: Number(r?.added ?? 0), updated: Number(r?.updated ?? 0), retired: Number(r?.retired ?? 0) };
+}
+
+/** 题库各状态的句数（bankId 不传时统计全部题库） */
+export async function bankCounts(bankId: string | null = null): Promise<BankCounts> {
+  const { rows } = await query<{ status: BankStatus; n: number }>(
+    `SELECT status, count(*)::int AS n FROM bank_items WHERE ($1::text IS NULL OR bank_id = $1) GROUP BY status`,
+    [bankId],
+  );
+  const out = Object.fromEntries(BANK_STATUSES.map((s) => [s, 0])) as BankCounts;
+  for (const r of rows) out[r.status] = Number(r.n);
+  return out;
 }

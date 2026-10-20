@@ -108,9 +108,25 @@ sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 htt
 | 看自动更新日志 | `sudo tail -n 30 /var/log/sentence-site-update.log` |
 | 手动备份数据库 | `sudo bash scripts/backup.sh` |
 | 导入旧页面导出的数据 | `sudo docker compose exec -T api node --experimental-strip-types scripts/import.ts < 导出文件.json` |
+| 导入 / 更新四级真题题库 | `sudo docker compose exec -T api node --experimental-strip-types scripts/import-bank.ts < cet4_long_sentences.jsonl` |
 | 停止网站 | `sudo docker compose down`（数据保留在 `data/postgres`） |
 
-## 每日任务
+## 四级真题题库
+
+除了让 AI 原创句子，还可以用四级真题阅读里的长难句。题库全站一份，只有你自己能导入和管理；题库文件不放进仓库（仓库是公开的），在服务器上导入。
+
+1. 把题库的 JSONL 文件（`cet4_long_sentences.jsonl`，每行一句）传到服务器的 `/opt/sentence-site` 下，比如 `scp cet4_long_sentences.jsonl 服务器:/tmp/`，再 `sudo mv /tmp/cet4_long_sentences.jsonl /opt/sentence-site/`。
+2. 导入（可以重复运行，题库更新了就再导一次）：
+
+   ```bash
+   cd /opt/sentence-site
+   sudo docker compose exec -T api node --experimental-strip-types scripts/import-bank.ts < cet4_long_sentences.jsonl
+   ```
+
+   导入完会打印各状态的句数。整份要么都写进去、要么都不写，中途出错题库不变。
+
+导入时按题库自己的质量状态初筛：核对过的（`reviewed`、`cloze_filled`）等着标注；拿不准的（`needs_review`）和没核对过的新句子先等你看一眼原文；选词填空还有空没填的（`incomplete_cloze`）不要。再次导入时按编号更新出处和标签；同一个编号原文变了，清掉原来的拆解、等重新标注；文件里已经没有的句子下架（已经抽给账户的那份不受影响）。
+
 
 练习页最上面是“今日任务”：每天到了你设的时间（北京时间，默认 7:50）自动生成（也可以点“现在生成”），进度条显示完成了几句。一句在第 3 步选对译文就算完成；全部完成后练习页显示完成页，可以复习今天的句子，也可以选 1–10 句加练（加练的句子算进今天的任务）。
 

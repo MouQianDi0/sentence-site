@@ -9,7 +9,8 @@ const PG = {
   user: process.env.TEST_PGUSER || 'postgres',
 };
 
-function psql(db: string, sql: string): string {
+/** extra：换掉默认的输出格式（-t 只输出数据行）时传 */
+function psql(db: string, sql: string, extra: string[] = ['-t']): string {
   try {
     return execFileSync(
       'psql',
@@ -17,7 +18,7 @@ function psql(db: string, sql: string): string {
         '-X',
         '-q',
         '-A',
-        '-t',
+        ...extra,
         '-v',
         'ON_ERROR_STOP=1',
         '-v',
@@ -64,6 +65,14 @@ export function createTestDb(name = `sentence_test_${process.pid}`): TestDb {
   psql('postgres', `CREATE DATABASE ${name}`);
   const query: QueryImpl = async (text, params = []) => {
     const sql = text.replace(/\$(\d+)/g, (_, n: string) => lit(params[Number(n) - 1])).trim();
+    // 带写入的 WITH（WITH x AS (INSERT …) SELECT …）不能再包进子查询，直接执行，按分隔符拆出各列（值都是字符串）
+    if (/^with\b/i.test(sql) && /\b(insert|update|delete)\b/i.test(sql)) {
+      const out = psql(name, sql, ['-F', '\x1f', '-R', '\x1e', '-P', 'footer=off']).replace(/\n$/, '');
+      const [head = '', ...lines] = out.split('\x1e').filter((l) => l !== '');
+      const cols = head.split('\x1f');
+      const rows = lines.map((l) => Object.fromEntries(l.split('\x1f').map((v, i) => [cols[i], v])));
+      return { rows, rowCount: rows.length };
+    }
     if (/^(select|with)\b/i.test(sql)) {
       const rows = JSON.parse(psql(name, `SELECT coalesce(json_agg(t), '[]'::json) FROM (${sql}) t`).trim() || '[]');
       return { rows, rowCount: rows.length };
