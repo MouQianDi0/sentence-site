@@ -2,6 +2,30 @@
 
 所有代码变更都记在这里，新的在最上面。时间是北京时间。
 
+## 2026-10-21 02:31:43
+
+**变更类型**：新功能
+
+**变更概述**：数据库改进第 5 步（三）：从真题题库抽题。“设置 → 每日任务”新增“题目来源”：AI 出题（默认，行为不变）/ 真题题库 / 先题库不够再 AI。题库只有四级：四六级混出时四级从题库抽、六级照旧 AI 出。抽题不调用模型、不占每日出题次数，没配模型的邀请账户也能用题库做每日任务。练习页显示出处。
+
+**修改的文件**
+
+- 修改 `shared/src/types.ts`
+- 修改 `api/src/repo.ts`、`api/src/ai.ts`、`api/src/practice.ts`、`api/src/daily.ts`、`api/src/app.ts`
+- 修改 `web/index.html`、`web/src/state.ts`、`web/src/lib/api.ts`、`web/src/practice/task.ts`、`web/src/practice/sentence.ts`、`web/src/settings/task-settings.ts`
+- 修改 `api/test/bank.test.ts`、`api/test/api.test.ts`
+- 修改 `README.md`、`CHANGELOG.md`
+
+**具体内容**
+
+- `PracticeSettings.questionSource`：`ai` / `bank` / `bankFirst`，存在 `accounts.practice` 里（不改表），没设过的账户是 `ai`。
+- `repo.drawFromBank(accountId, levels, n)`：从启用的题库里随机抽这个账户没抽过的 ready 句子（只读）；`insertSentence` 可以带 `bankItemId`，`ON CONFLICT DO NOTHING` 不写冲突列，编号撞了或这句已经抽过都跳过（抽过的不再换编号重试）。
+- `ai.generate` 加 `from`：先按难度分好句数，四级从题库抽，剩下的交给 AI（`draftAi`），最后打乱一起写入（`store`，编号规则和原来一样，来源照旧是 daily / extra）。只有 AI 那部分占加练出题次数；题库抽到了、AI 那部分没出成时先存抽到的；两边都没有时返回 409 并提示改成“先题库”。
+- 每日定时任务：题目来源不是 AI、难度里有四级的账户，没配模型也照顾。
+- `listSentences`、`getSentence`、`recentSentences` LEFT JOIN `bank_items`，给 `Sentence` 带上可选的 `origin`（出处文字）和 `cloze`（选词填空第几空、填的词），不直接返回 `bank_items` 的行。
+- 页面：设置里的“题目来源”三选一和说明；没配模型但能从题库抽时，“现在生成”“加练”“补齐”照样能点；练习页句子上方显示出处，选词填空的句子说明原题第几空。
+- 测试：没配模型的邀请账户从题库出题；只抽 ready 的四级、不重复、抽完返回 409；不占出题次数；接口不返回 `bank_items` 的字段；owner 和邀请账户各抽各的，删掉自己的那份不影响别人、还能再抽到；停用的题库不抽；先题库模式四级抽题库、六级 AI 出，占一次出题次数，题库抽完由 AI 补上；只选六级照旧 AI；每日定时任务给没配模型的邀请账户从题库生成。
+
 ## 2026-10-21 02:23:07
 
 **变更类型**：新功能

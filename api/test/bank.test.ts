@@ -10,7 +10,12 @@ import { annotateItem, precheck } from '../src/annotate.ts';
 import { specExample } from '../src/spec.ts';
 import { plainText } from '../src/validate.ts';
 import { LlmError, type Llm } from '../src/llm.ts';
-import type { SentenceBody } from '@sentence-site/shared';
+import type { Sentence, SentenceBody } from '@sentence-site/shared';
+import { createLlm } from '../src/llm.ts';
+import { createAi } from '../src/ai.ts';
+import { createDailyRunner } from '../src/daily.ts';
+import { createPractice } from '../src/practice.ts';
+import { shanghaiDate } from '../src/time.ts';
 import { loadConfig } from '../src/config.ts';
 import { createApp } from '../src/app.ts';
 import { createTestDb, startApp, startFakeLlm, type TestApp, type TestDb } from './helpers.ts';
@@ -480,5 +485,199 @@ test('网站：后台标注用你自己的国内模型，token 记在你名下�
   } finally {
     site.close();
     fake.close();
+  }
+});
+
+// ---- 抽题 ---------------------------------------------------------------------------
+
+/** 题库里放 6 句标注好的四级、1 句标注好的六级、1 句还没标注的 */
+async function seedReadyBank(): Promise<void> {
+  db.raw('DELETE FROM sentences WHERE bank_item_id IS NOT NULL');
+  db.raw('DELETE FROM bank_items');
+  const lines = Array.from({ length: 6 }, (_, i) =>
+    fakeLine(`t-ok-${i}`, `Ready sentence number ${i} is waiting in the fake bank for someone to draw it.`),
+  );
+  lines.push(
+    fakeLine('t-six', 'A ready sentence of level six that a level four draw must never pick up at all.', {
+      level: 'CET-6',
+    }),
+  );
+  lines.push(fakeLine('t-raw', 'A sentence that has not been annotated yet and so it cannot be drawn by anyone.'));
+  lines.push(
+    fakeLine('t-cloze', 'Ready cloze sentence with a filled blank that also waits in the fake bank for a draw.', {
+      cloze: [{ no: 31, word: 'filled' }],
+      sources: [{ section: 'A', year: 2024, month: 6, set_number: 1 }],
+    }),
+  );
+  await repo.importBank(CET4_BANK, parseBankJsonl(lines.join('\n')));
+  const body = JSON.stringify(EXAMPLE).replace(/'/g, "''");
+  db.raw(`UPDATE bank_items SET status = 'ready', body = '${body}'::jsonb WHERE external_id <> 't-raw'`);
+}
+
+/** 这个账户从题库复制来的句子：题库编号 */
+const copies = (accountId: string) =>
+  db
+    .raw(
+      `SELECT b.external_id FROM sentences s JOIN bank_items b ON b.id = s.bank_item_id
+       WHERE s.account_id = '${accountId}' ORDER BY 1`,
+    )
+    .trim()
+    .split('\n')
+    .filter(Boolean);
+
+test('抽题：没配模型的邀请账户也能从题库出题，只抽标注好的四级，不重复，不占出题次数；账户之间互不影响', async () => {
+  await seedReadyBank();
+  const site = await siteWithMember();
+  try {
+    const { owner, member, memberId } = site;
+    // 默认还是 AI 出题：没配模型就出不了
+    assert.equal((await member.api('GET', '/api/settings/practice')).body.questionSource, 'ai');
+    assert.equal((await member.api('POST', '/api/sentences/generate', { kind: 'extra', count: 2 })).status, 503);
+    const bad = await member.api('PUT', '/api/settings/practice', { questionSource: 'nope' });
+    assert.equal(bad.status, 400);
+    const set = await member.api('PUT', '/api/settings/practice', { questionSource: 'bank', levels: ['CET-4'] });
+    assert.equal(set.body.questionSource, 'bank');
+
+    const first = await member.api('POST', '/api/sentences/generate', { kind: 'extra', count: 4 });
+    assert.equal(first.status, 200);
+    assert.equal(first.body.added.length, 4);
+    assert.ok(
+      first.body.added.every((id: string) => id.startsWith(`${memberId}-s-`)),
+      '编号规则和 AI 出题一样',
+    );
+    // 再要 10 句：只剩 3 句标注好的四级
+    const second = await member.api('POST', '/api/sentences/generate', { kind: 'extra', count: 10 });
+    assert.equal(second.body.added.length, 3);
+    const mine = copies(memberId);
+    assert.equal(mine.length, 7);
+    assert.equal(new Set(mine).size, 7, '不重复');
+    assert.ok(!mine.includes('t-six') && !mine.includes('t-raw'), '不抽六级、不抽没标注好的');
+    // 抽完了
+    const empty = await member.api('POST', '/api/sentences/generate', { kind: 'extra', count: 1 });
+    assert.equal(empty.status, 409);
+    assert.match(empty.body.error, /题库里没有能抽的/);
+    assert.equal((await member.api('GET', '/api/usage')).body.gens, 0, '从题库抽不占出题次数');
+
+    // 页面上看到的：出处、选词填空第几空；不直接给 bank_items 的行
+    const list = (await member.api('GET', '/api/sentences')).body.sentences as Sentence[];
+    const fromBank = list.filter((s) => s.origin);
+    assert.equal(fromBank.length, 7);
+    assert.ok(fromBank.every((s) => s.source === 'extra' && s.level === 'CET-4'));
+    assert.equal(fromBank.find((s) => s.cloze)?.origin, '四级真题 2024 年 6 月第 1 套 · 选词填空');
+    assert.deepEqual(fromBank.find((s) => s.cloze)?.cloze, [{ no: 31, word: 'filled' }]);
+    assert.ok(fromBank[0] && plainText(fromBank[0].segs) === EXAMPLE_TEXT);
+    for (const key of ['fromBank', 'bYear', 'bCloze', 'bank_item_id', 'bankItemId', 'meta', 'body']) {
+      assert.ok(!(key in (fromBank[0] as object)), key);
+    }
+
+    // owner 照样能抽到同样的句子（各复制各的）
+    await owner.api('PUT', '/api/settings/practice', { questionSource: 'bank', levels: ['CET-4'] });
+    assert.equal(
+      (await owner.api('POST', '/api/sentences/generate', { kind: 'extra', count: 2 })).body.added.length,
+      2,
+    );
+    assert.equal(copies('owner').length, 2);
+    assert.equal(copies(memberId).length, 7);
+    // 删掉自己复制的那句，别的账户的不受影响；删掉后可以再抽到
+    const [ownerFirst] = (await owner.api('GET', '/api/sentences')).body.sentences.filter((s: Sentence) => s.origin);
+    assert.equal((await owner.api('DELETE', `/api/sentences/${ownerFirst.id}`)).status, 200);
+    assert.equal(copies('owner').length, 1);
+    assert.equal(copies(memberId).length, 7);
+
+    // 停用题库：不再抽到；启用后照常
+    await owner.api('PUT', `/api/admin/bank/${CET4_BANK.id}`, { enabled: false });
+    assert.equal((await owner.api('POST', '/api/sentences/generate', { kind: 'extra', count: 1 })).status, 409);
+    await owner.api('PUT', `/api/admin/bank/${CET4_BANK.id}`, { enabled: true });
+    assert.equal((await owner.api('POST', '/api/sentences/generate', { kind: 'extra', count: 1 })).status, 200);
+
+    // 今日任务也能从题库出（没配模型）
+    await seedReadyBank();
+    const daily = await member.api('POST', '/api/sentences/generate', { kind: 'daily' });
+    assert.equal(daily.status, 200);
+    assert.ok(daily.body.added.every((id: string) => /-d\d+$/.test(id)));
+  } finally {
+    site.close();
+  }
+});
+
+test('抽题：先题库不够再 AI——四六级混出时四级从题库抽、六级 AI 出；题库抽完了四级也由 AI 补上', async () => {
+  await seedReadyBank();
+  const fake = await startFakeLlm({
+    generate: (prompt) => {
+      const order = /按顺序出：(.*?)。/.exec(prompt)?.[1]?.match(/CET-[46]/g) || ['CET-4'];
+      return { sentences: order.map((level) => ({ ...EXAMPLE, level })) };
+    },
+  });
+  const site = await siteWithMember();
+  try {
+    const { owner } = site;
+    db.raw(`DELETE FROM ai_usage WHERE account_id = 'owner'`);
+    await owner.api('PUT', '/api/settings/llm', { baseUrl: fake.url, apiKey: 'k', mainModel: 'fake-main' });
+    await owner.api('PUT', '/api/settings/practice', { questionSource: 'bankFirst', levels: ['CET-4', 'CET-6'] });
+    const r = await owner.api('POST', '/api/sentences/generate', { kind: 'extra', count: 4 });
+    assert.equal(r.body.added.length, 4);
+    const added = (await owner.api('GET', '/api/sentences')).body.sentences.filter((s: Sentence) =>
+      r.body.added.includes(s.id),
+    ) as Sentence[];
+    assert.deepEqual(
+      added.filter((s) => s.origin).map((s) => s.level),
+      ['CET-4', 'CET-4'],
+    );
+    assert.deepEqual(
+      added.filter((s) => !s.origin).map((s) => s.level),
+      ['CET-6', 'CET-6'],
+    );
+    const prompt = fake.calls.find((c) => c.prompt?.includes('按顺序出'))?.prompt ?? '';
+    assert.match(prompt, /按顺序出：第 1 句 CET-6，第 2 句 CET-6。/, '四级不让 AI 出');
+    assert.equal((await owner.api('GET', '/api/usage')).body.gens, 1, 'AI 出了题，占一次');
+
+    // 只出四级、题库已经抽完：先题库模式由 AI 补上
+    db.raw(`UPDATE bank_items SET status = 'rejected', reject_reason = '测试' WHERE status = 'ready'`);
+    await owner.api('PUT', '/api/settings/practice', { levels: ['CET-4'] });
+    const more = await owner.api('POST', '/api/sentences/generate', { kind: 'extra', count: 2 });
+    assert.equal(more.body.added.length, 2);
+    // 纯题库模式就没有了
+    await owner.api('PUT', '/api/settings/practice', { questionSource: 'bank' });
+    assert.equal((await owner.api('POST', '/api/sentences/generate', { kind: 'extra', count: 2 })).status, 409);
+    // 只选六级：用不到题库，照旧 AI 出
+    await owner.api('PUT', '/api/settings/practice', { levels: ['CET-6'] });
+    assert.equal((await owner.api('POST', '/api/sentences/generate', { kind: 'extra', count: 1 })).status, 200);
+  } finally {
+    site.close();
+    fake.close();
+  }
+});
+
+test('每日定时任务：选了题库的邀请账户没配模型也会生成', async () => {
+  await seedReadyBank();
+  const site = await siteWithMember();
+  try {
+    await site.member.api('PUT', '/api/settings/practice', {
+      questionSource: 'bank',
+      levels: ['CET-4'],
+      dailyCount: 3,
+      dailyAt: '00:00',
+    });
+    const cfg = loadConfig({ ACCESS_PASSWORD: 'pw-bank', COOKIE_SECRET: 'b'.repeat(64) });
+    const noLlm = createLlm(cfg);
+    const runner = createDailyRunner({
+      ai: createAi({ cfg, llm: noLlm, log: quiet }),
+      llmFor: async () => noLlm,
+      practice: createPractice(cfg),
+      log: quiet,
+    });
+    await runner.tick();
+    const today = shanghaiDate();
+    assert.equal(
+      db
+        .raw(
+          `SELECT count(*) FROM sentences WHERE account_id = '${site.memberId}' AND source = 'daily'
+              AND batch = '${today}' AND bank_item_id IS NOT NULL`,
+        )
+        .trim(),
+      '3',
+    );
+  } finally {
+    site.close();
   }
 });

@@ -1,6 +1,7 @@
 // 每天按各账户自己设的时间（北京时间，默认 7:50，可在“设置”→“每日任务”里改或关掉）自动生成今日任务；
 // 句数和难度也按各账户的“每日任务”设置。.env 里 DAILY_GENERATE=0 时整个功能关掉。
 // 照顾的账户：你自己，加上最近 7 天登录过、而且配好了自己模型的邀请账户（很久没来的回来后在页面上点一下就能生成）。
+// 题目来源选了真题题库、难度里有四级的账户，没配模型也照顾（四级从题库抽，不用模型）。
 // 服务重启后如果当天已经过了设定时间还没出题，也会补上。
 import type { AppConfig } from './config.ts';
 import type { Llm } from './llm.ts';
@@ -48,7 +49,9 @@ export function createDailyRunner({ ai, llmFor, practice, log = console, now = (
         // 关了自动生成、或者还没到这个账户设的时间：先不管，下一分钟再看（中途改了设置也能跟上）
         if (!set.autoDaily || minute < minutesOf(set.dailyAt)) continue;
         try {
-          if (!(await llmFor(acc, BACKGROUND)).ready()) continue;
+          // 四级能从题库抽的，没配模型也能出（六级那部分出不了就少几句）
+          const bankOk = set.questionSource !== 'ai' && set.levels.includes('CET-4');
+          if (!bankOk && !(await llmFor(acc, BACKGROUND)).ready()) continue;
           if (await repo.hasDailyFor(acc.id, day)) {
             done.set(acc.id, day);
             continue;
@@ -58,6 +61,7 @@ export function createDailyRunner({ ai, llmFor, practice, log = console, now = (
             n: set.dailyCount,
             levels: set.levels,
             background: true,
+            from: set.questionSource,
           });
           done.set(acc.id, day);
           log.log(`[daily] ${day} ${acc.role === 'owner' ? '我' : acc.note || acc.id} 新增 ${ids.length} 句`);

@@ -94,6 +94,7 @@ export const state = {
   freshFb: false,
   practiceCfg: {
     levels: ['CET-4', 'CET-6'],
+    questionSource: 'ai',
     dailyCount: 5,
     maxDaily: 10,
     dailyAt: '07:50',
@@ -128,6 +129,13 @@ export const lastAttempt = (id: string): Attempt | null => atts(id)[0] || null;
 
 /** AI 能不能用（还没读到用量时先当能用） */
 export const aiOk = (): boolean => (state.usage ? state.usage.aiReady : true);
+
+/** 题目来源选了真题题库、难度里有四级：四级从题库抽，不用模型 */
+export const bankOn = (): boolean =>
+  state.practiceCfg.questionSource !== 'ai' && state.practiceCfg.levels.includes('CET-4');
+
+/** 能不能出题（生成今日任务、加练）：AI 能用，或者能从题库抽 */
+export const genOk = (): boolean => aiOk() || bankOn();
 
 /** 今天（北京时间）的日期，和后端给句子打的 batch 一致，不受手机时区影响 */
 export const today = (): string => new Date(Date.now() + 8 * 3600e3).toISOString().slice(0, 10);

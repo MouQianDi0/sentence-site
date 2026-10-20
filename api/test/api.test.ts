@@ -539,7 +539,8 @@ test('难度分配：只选一种全是它，两种都选各占一半', () => {
 });
 
 test('每日任务设置：默认值、校验、保存后重启还在', async () => {
-  const base = { maxDaily: 10, serverDaily: true, accuracyBoost: false };
+  // 题目来源没设过的账户照旧 AI 出题
+  const base = { maxDaily: 10, serverDaily: true, accuracyBoost: false, questionSource: 'ai' };
   let r = await app.api('GET', '/api/settings/practice');
   assert.deepEqual(r.body, { levels: ['CET-4'], dailyCount: 5, autoDaily: true, dailyAt: '07:50', ...base });
   const bads = [
@@ -553,6 +554,7 @@ test('每日任务设置：默认值、校验、保存后重启还在', async ()
     { dailyAt: 750 },
     { autoDaily: 'no' },
     { accuracyBoost: 'yes' },
+    { questionSource: 'random' },
   ];
   for (const bad of bads) {
     assert.equal((await app.api('PUT', '/api/settings/practice', bad)).status, 400, JSON.stringify(bad));
@@ -579,6 +581,11 @@ test('每日任务设置：默认值、校验、保存后重启还在', async ()
   assert.equal(p2.get(await repo.getAccount('owner')).dailyAt, '07:05');
   assert.equal(p2.get(await repo.getAccount('owner')).accuracyBoost, true);
   await app.api('PUT', '/api/settings/practice', { accuracyBoost: false });
+  // 题目来源：只改这一项，其它不变；改回 AI 出题
+  r = await app.api('PUT', '/api/settings/practice', { questionSource: 'bankFirst' });
+  assert.deepEqual([r.body.questionSource, r.body.dailyCount, r.body.levels], ['bankFirst', 7, ['CET-4', 'CET-6']]);
+  assert.equal(p2.get(await repo.getAccount('owner')).questionSource, 'bankFirst');
+  await app.api('PUT', '/api/settings/practice', { questionSource: 'ai' });
   // .env 关掉每日出题时告诉页面
   assert.equal(createPractice(loadConfig({ DAILY_GENERATE: '0' })).get({}).serverDaily, false);
   await app.api('PUT', '/api/settings/practice', { autoDaily: true, dailyAt: '07:50' });

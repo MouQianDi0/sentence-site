@@ -70,6 +70,10 @@ export interface Sentence {
   opts: Opt[];
   words: WordNote[];
   phrases: Phrase[];
+  /** 从真题题库抽来的句子：出处，如“四级真题 2023 年 12 月第 2 套 · 仔细阅读”。AI 出的句子没有 */
+  origin?: string;
+  /** 从选词填空抽来的句子：原题这里是第几空、填的词（按备选词推断，不是官方答案） */
+  cloze?: { no: number; word: string }[];
 }
 
 /** 谓语标注的一处：按整句单词下标，a 到 b（含） */
@@ -293,9 +297,14 @@ export interface BankItem {
 }
 
 // ---- 设置 --------------------------------------------------------------------
+/** 题目从哪来：ai = AI 原创；bank = 真题题库（只有四级，六级照旧 AI 出）；bankFirst = 先从题库抽，不够再 AI 出 */
+export type QuestionSource = 'ai' | 'bank' | 'bankFirst';
+
 /** 每日任务设置（GET/PUT /api/settings/practice） */
 export interface PracticeSettings {
   levels: Level[];
+  /** 题目来源（今日任务和加练都按它）；默认 ai */
+  questionSource: QuestionSource;
   dailyCount: number;
   /** 这个账户有没有开自动生成 */
   autoDaily: boolean;

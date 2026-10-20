@@ -6,7 +6,7 @@ import { $, all, closest } from '../lib/dom.ts';
 import { esc, scoreTone } from '../lib/format.ts';
 import { toast } from '../lib/toast.ts';
 import { C, TONE } from '../styles.ts';
-import { state, rec, atts, aiOk, taskInfo } from '../state.ts';
+import { state, rec, atts, bankOn, genOk, taskInfo } from '../state.ts';
 import { autoOn, fmtAt, levelText } from '../settings/task-settings.ts';
 import { renderViews, showView } from '../views.ts';
 import { checkNewSentences } from './data.ts';
@@ -18,7 +18,7 @@ const LV_SHORT: Record<string, string> = { 'CET-4': '四级', 'CET-6': '六级' 
 function busyHTML(): string {
   const n = state.taskBusyN;
   return `<div class="flex items-center gap-2.5 rounded-xl bg-raise px-3 py-2.5 text-[14px]"><span class="${C.spin}"></span>
-    <span class="flex-1">AI 正在出 ${n} 道${esc(levelText(state.practiceCfg.levels))}的题，${n > 5 ? '一两分钟' : '大约 1 分钟'}，可以先练句库里的旧句子。</span></div>`;
+    <span class="flex-1">${bankOn() ? '正在准备' : 'AI 正在出'} ${n} 道${esc(levelText(state.practiceCfg.levels))}的题，${bankOn() && state.practiceCfg.questionSource === 'bank' && !state.practiceCfg.levels.includes('CET-6') ? '马上就好' : n > 5 ? '一两分钟' : '大约 1 分钟'}，可以先练句库里的旧句子。</span></div>`;
 }
 
 function errHTML(): string {
@@ -40,7 +40,7 @@ function extraHTML(primary: boolean): string {
       <button data-act="extraPlus" aria-label="多一句" class="${stepBtn}" ${extraCount >= max ? 'disabled' : ''}>+</button>
     </div>
     <span class="text-[14px] text-muted">句</span>
-    <button class="${primary ? C.btnPrimary : C.btn}" data-act="extraGo" ${aiOk() && !state.taskBusy ? '' : 'disabled'}>开始加练</button>
+    <button class="${primary ? C.btnPrimary : C.btn}" data-act="extraGo" ${genOk() && !state.taskBusy ? '' : 'disabled'}>开始加练</button>
   </div>`;
 }
 
@@ -60,10 +60,10 @@ export function renderTask(): void {
   if (!t.list.length) {
     body = state.taskBusy
       ? busyHTML()
-      : aiOk()
+      : genOk()
         ? `<p class="m-0 text-[14.5px]">今天的 ${cfg.dailyCount} 句还没生成。${autoOn(cfg) ? `每天 ${esc(fmtAt(cfg.dailyAt))} 会自动生成，` : ''}也可以现在生成。</p>
           <div class="${C.row}"><button class="${C.btnPrimary}" data-act="genDaily">现在生成今天的 ${cfg.dailyCount} 句</button></div>`
-        : `<p class="m-0 text-[14.5px]">还没配置 AI 模型，没法生成今天的句子。</p><div class="${C.row}"><button class="${C.btnPrimary}" data-act="taskSettings">去设置模型</button></div>`;
+        : `<p class="m-0 text-[14.5px]">还没配置 AI 模型，没法生成今天的句子。也可以在设置里把题目来源改成“真题题库”，四级不用模型。</p><div class="${C.row}"><button class="${C.btnPrimary}" data-act="taskSettings">去设置模型</button></div>`;
   } else {
     const pct = Math.round((t.done / (t.list.length + t.missing)) * 100);
     const bar =
@@ -90,7 +90,7 @@ export function renderTask(): void {
         state.taskBusy
           ? busyHTML()
           : `<div class="${C.row}">
-        ${t.missing ? `<button class="${C.btnPrimary} px-3 py-1.5 text-[13.5px]" data-act="genDaily" ${aiOk() ? '' : 'disabled'}>补齐 ${t.missing} 句</button>` : ''}
+        ${t.missing ? `<button class="${C.btnPrimary} px-3 py-1.5 text-[13.5px]" data-act="genDaily" ${genOk() ? '' : 'disabled'}>补齐 ${t.missing} 句</button>` : ''}
         ${t.complete && !state.showDone ? `<button class="${C.btnSmall}" data-act="showDone">查看完成页</button>` : ''}
         <button class="${C.btnSmall}" data-act="extraToggle" aria-expanded="${state.extraOpen}">＋ 加练</button>
       </div>

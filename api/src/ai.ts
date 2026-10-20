@@ -5,6 +5,7 @@ import type {
   Feedback,
   Level,
   LookupResult,
+  QuestionSource,
   Seg,
   Sentence,
   SentenceBody,
@@ -154,7 +155,7 @@ export interface Ai {
   lookup(account: Account, sentenceId: unknown, rawWord: unknown): Promise<LookupResult>;
   generate(
     account: Account,
-    opts?: { source?: SentenceSource; n?: number; levels?: Level[]; background?: boolean },
+    opts?: { source?: SentenceSource; n?: number; levels?: Level[]; background?: boolean; from?: QuestionSource },
   ): Promise<string[]>;
   reviewOne(account: Account, id: unknown): Promise<{ sentence: Sentence | null; changed: boolean; note: string }>;
   setMarks(account: Account, id: unknown, spans: unknown): Promise<{ sentence: Sentence | null }>;
@@ -444,11 +445,17 @@ export function createAi({
     return out;
   }
 
+  /** 要写进句库的一句：校验过的内容 + 难度，从题库抽来的带上题库编号 */
+  type NewItem = SentenceBody & { level: Level; bankItemId?: number };
+
   /**
    * 生成 n 句并写入数据库，返回新句子的 id。
    * source：daily = 今日任务（不算进手动出题次数），extra = 加练。
    * levels：要出的难度，两种都选时各占一半、顺序随机。句子没通过校验或难度不对时会补出，最多多请求 2 次。
    * background：定时任务触发的（没人在页面上点），你自己的账户只有在设置里同意了才会用 ChatGPT 套餐。
+   * from：题目来源。ai = AI 出题；bank = 四级从真题题库抽（题库只有四级，六级照旧 AI 出，题库抽完了就少几句）；
+   * bankFirst = 四级先从题库抽，不够的再让 AI 出。从题库抽不调用模型、不占每日出题次数，没配模型也能用；
+   * 还要 AI 出的那部分照旧占一次出题次数。题库抽到了、AI 那部分没出成时，先把抽到的存下来。
    */
   async function generate(
     account: Account,
@@ -457,39 +464,88 @@ export function createAi({
       n = 5,
       levels = LEVELS,
       background = false,
-    }: { source?: SentenceSource; n?: number; levels?: Level[]; background?: boolean } = {},
+      from = 'ai',
+    }: { source?: SentenceSource; n?: number; levels?: Level[]; background?: boolean; from?: QuestionSource } = {},
   ): Promise<string[]> {
     if (source === 'daily') {
       if (dailyBusy.has(account.id)) throw new HttpError(409, '今天的任务正在生成，稍等一下');
       dailyBusy.add(account.id);
     }
     try {
-      // 今日任务不算进出题次数
-      if (source === 'daily') return await generateNow(account, shanghaiDate(), source, n, levels, background);
-      return await withQuota(account, 'gens', cfg.limits.generate, '今天加练出题的次数用完了（{n} 次）', (day) =>
-        generateNow(account, day, source, n, levels, background),
-      );
+      const day = shanghaiDate();
+      const need: Need = {};
+      for (const l of planLevels(n, levels)) need[l] = (need[l] || 0) + 1;
+      const drawn: NewItem[] = [];
+      const want4 = need['CET-4'] ?? 0;
+      if (from !== 'ai' && want4) {
+        for (const d of await repo.drawFromBank(account.id, ['CET-4'], want4)) {
+          const checked = checkSentence(d.body);
+          if (checked.ok) drawn.push({ ...checked.value, level: d.level, bankItemId: d.id });
+        }
+        need['CET-4'] = from === 'bank' ? 0 : want4 - drawn.length;
+      }
+      let made: NewItem[] = [];
+      if (LEVELS.some((l) => (need[l] ?? 0) > 0)) {
+        const draft = () => draftAi(account, need, background);
+        try {
+          // 今日任务不算进出题次数
+          made =
+            source === 'daily'
+              ? await draft()
+              : await withQuota(account, 'gens', cfg.limits.generate, '今天加练出题的次数用完了（{n} 次）', draft);
+        } catch (e) {
+          if (!drawn.length) throw e;
+          log.warn?.(`[ai] 题库抽到 ${drawn.length} 句，AI 出题没成功：${(e as Error).message}`);
+        }
+      }
+      if (!drawn.length && !made.length) {
+        throw new HttpError(
+          409,
+          '真题题库里没有能抽的四级句子了（都练过了，或者还没标注好）。可以在设置里把题目来源改成“先题库，不够再 AI 出题”',
+        );
+      }
+      return await store(account, day, source, shuffleCopy([...drawn, ...made]));
     } finally {
       if (source === 'daily') dailyBusy.delete(account.id);
     }
   }
 
-  async function generateNow(
-    account: Account,
-    day: string,
-    source: SentenceSource,
-    n: number,
-    levels: Level[],
-    background: boolean,
-  ): Promise<string[]> {
-    // 出题和出题后的谓语复核分开记 token 用量
-    const L = metered(await llmFor(account, { kind: 'generate', background }), account.id, 'generate', log);
-    const reviewer = metered(await llmFor(account, { kind: 'review', background }), account.id, 'review', log);
+  /**
+   * 写入句库，返回新句子的 id。编号被占用时（删过句子、同一秒内加练两次）顺延；
+   * 题库的句子这个账户已经复制过（同时抽了两次）就跳过
+   */
+  async function store(account: Account, day: string, source: SentenceSource, items: NewItem[]): Promise<string[]> {
     const clock = shanghaiClock();
     const now = Date.now();
     const offset = source === 'daily' ? await repo.countDailyFor(account.id, day) : 0;
-    const need: Need = {};
-    for (const l of planLevels(n, levels)) need[l] = (need[l] || 0) + 1;
+    const ids: string[] = [];
+    const d = day.replace(/-/g, '');
+    let next = source === 'daily' ? offset + 1 : 1;
+    for (const item of items) {
+      const created = new Date(now + ids.length + 1).toISOString();
+      for (let tries = 0; tries < 30; tries++, next++) {
+        // 句子 id 全局唯一：邀请账户的加上账户 id 做前缀，owner 保持原来的格式
+        const base = source === 'daily' ? `s-${d}-d${next}` : `s-${d}-${clock}-${next}`;
+        const id = account.role === 'owner' ? base : `${account.id}-${base}`;
+        if (await repo.insertSentence({ ...item, id, created, batch: day, source, accountId: account.id })) {
+          ids.push(id);
+          next++;
+          break;
+        }
+        if (item.bankItemId && (await repo.hasBankCopy(account.id, item.bankItemId))) break;
+      }
+    }
+    if (!ids.length) throw new HttpError(502, '题目没保存成功，再试一次');
+    return ids;
+  }
+
+  /** 让 AI 出题：need 是每种难度要几句。返回通过校验的句子，一句都没有时抛错 */
+  async function draftAi(account: Account, needIn: Need, background: boolean): Promise<NewItem[]> {
+    // 出题和出题后的谓语复核分开记 token 用量
+    const L = metered(await llmFor(account, { kind: 'generate', background }), account.id, 'generate', log);
+    const reviewer = metered(await llmFor(account, { kind: 'review', background }), account.id, 'review', log);
+    const need: Need = { ...needIn };
+    const n = LEVELS.reduce((k, l) => k + (need[l] ?? 0), 0);
     const accepted: (SentenceBody & { level: Level })[] = [];
     const reasons: string[] = [];
     const recentDb = await repo.recentSentences(account.id, 40);
@@ -589,28 +645,11 @@ export function createAi({
         if (fatal(r.error)) break;
       }
     }
-    if (!accepted.length && lastError) throw toHttpError(lastError);
     if (reasons.length) log.warn?.(`[ai] 生成时丢弃：${reasons.join('；')}`);
-
-    // 打乱顺序后再写入，四级六级混着出现。编号被占用时（删过句子、同一秒内加练两次）顺延
-    const ids: string[] = [];
-    const d = day.replace(/-/g, '');
-    let next = source === 'daily' ? offset + 1 : 1;
-    for (const item of shuffleCopy(accepted)) {
-      const created = new Date(now + ids.length + 1).toISOString();
-      for (let tries = 0; tries < 30; tries++, next++) {
-        // 句子 id 全局唯一：邀请账户的加上账户 id 做前缀，owner 保持原来的格式
-        const base = source === 'daily' ? `s-${d}-d${next}` : `s-${d}-${clock}-${next}`;
-        const id = account.role === 'owner' ? base : `${account.id}-${base}`;
-        if (await repo.insertSentence({ ...item, id, created, batch: day, source, accountId: account.id })) {
-          ids.push(id);
-          next++;
-          break;
-        }
-      }
+    if (!accepted.length) {
+      throw lastError ? toHttpError(lastError) : new HttpError(502, 'AI 这次出的题都没通过校验，再试一次');
     }
-    if (!ids.length) throw new HttpError(502, 'AI 这次出的题都没通过校验，再试一次');
-    return ids;
+    return accepted;
   }
 
   return { grade, lookup, generate, reviewOne, setMarks };

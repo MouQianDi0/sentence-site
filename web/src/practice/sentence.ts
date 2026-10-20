@@ -61,6 +61,7 @@ export function renderSentence(): void {
     $('label').textContent = '';
     $('focus').textContent = '';
     $('lvl').classList.add('hidden');
+    $('origin').classList.add('hidden');
     $('tools').classList.add('invisible');
     $('pin').classList.add('invisible');
     el.innerHTML = state.loaded
@@ -77,6 +78,11 @@ export function renderSentence(): void {
   $('lvl').classList.toggle('hidden', !cur.level);
   $('lvl').textContent = cur.level ?? '';
   $('focus').textContent = cur.focus ?? '';
+  // 从真题题库抽来的：出处；选词填空的句子再说一下原题这里是第几空（答案按备选词推断）
+  const cloze = cur.cloze?.length ? ` · 原题第 ${cur.cloze.map((c) => `${c.no} 空填 ${c.word}`).join('、')}` : '';
+  $('origin').classList.toggle('hidden', !cur.origin);
+  $('origin').textContent = cur.origin ? `${cur.origin}${cloze}` : '';
+  $('origin').title = cloze ? '选词填空的答案是按备选词推断的，不是官方答案' : '';
   const dict = (state.dictMode && !fix) || step === 3;
   // 第 3 步一直是查词状态：按钮保持原位、显示为按下且不能点，工具栏不会因为它消失而挪动
   const dictBtn = $<HTMLButtonElement>('dict');

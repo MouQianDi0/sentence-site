@@ -1,7 +1,7 @@
-// “设置”页里的“每日任务”卡片：出四级还是六级（可以都选，混合随机）、每天几句（1–10）、
-// 每天几点自动生成（北京时间，也可以关掉）；以及“AI 批改”卡片的“准确度提升”开关。
+// “设置”页里的“每日任务”卡片：出四级还是六级（可以都选，混合随机）、题目来源（AI 出题 / 真题题库 / 先题库不够再 AI）、
+// 每天几句（1–10）、每天几点自动生成（北京时间，也可以关掉）；以及“AI 批改”卡片的“准确度提升”开关。
 // 两张卡片的设置存在一起（/api/settings/practice），改了自动保存。
-import type { AccountRole, Level, PracticeSettings } from '@sentence-site/shared';
+import type { AccountRole, Level, PracticeSettings, QuestionSource } from '@sentence-site/shared';
 import { api } from '../lib/api.ts';
 import { closest } from '../lib/dom.ts';
 import { esc } from '../lib/format.ts';
@@ -11,6 +11,13 @@ import type { Toast } from '../lib/toast.ts';
 export const LEVELS: { id: Level; name: string; sub: string }[] = [
   { id: 'CET-4', name: '四级', sub: 'CET-4' },
   { id: 'CET-6', name: '六级', sub: 'CET-6' },
+];
+
+/** 题目来源的几个选项 */
+const SOURCES: { id: QuestionSource; name: string; sub: string }[] = [
+  { id: 'ai', name: 'AI 出题', sub: '每次原创新句子' },
+  { id: 'bank', name: '真题题库', sub: '四级真题阅读原句' },
+  { id: 'bankFirst', name: '先题库', sub: '不够再 AI 出题' },
 ];
 
 /** ['CET-4','CET-6'] → “四级 + 六级混合” */
@@ -182,6 +189,7 @@ export function createTaskSettings({
             <span class="flex flex-col"><b class="text-[15px] ${on ? 'text-accent' : ''}">${l.name}</b><span class="font-mono text-[11.5px] text-muted">${l.sub}</span></span></button>`;
         }).join('')}</div>
         <span class="text-[12.5px] text-muted">${both ? '两个都选：四级、六级各占一半，顺序随机。' : `只出${levelText(cfg.levels)}的句子。两个都选可以混合练。`}</span></div>
+      ${sourceHTML(cfg)}
       <div class="flex flex-col gap-2"><span class="text-[14px] font-semibold">每天几句</span>
         <div class="flex items-center gap-3">
           <div class="inline-flex items-center rounded-full border-[1.5px] border-line bg-sheet">
@@ -195,6 +203,24 @@ export function createTaskSettings({
       ${autoHTML()}
     </section>`;
     if (enter) A.enter(root.children);
+  }
+
+  /** 题目来源：三个选项 + 说明（题库只有四级） */
+  function sourceHTML(c: PracticeSettings): string {
+    const cur = c.questionSource;
+    const note =
+      cur === 'ai'
+        ? '每次让 AI 原创新句子，要配好模型，加练占每日出题次数。'
+        : !c.levels.includes('CET-4')
+          ? '题库只有四级真题，只选六级时用不到题库，照旧 AI 出题。'
+          : `四级从真题阅读里抽（抽过的不会再抽，不用模型、不占出题次数）${cur === 'bank' ? '，题库抽完了就少几句' : '，题库不够的再让 AI 出'}${c.levels.includes('CET-6') ? '；六级照旧 AI 出题' : ''}。`;
+    return `<div class="flex flex-col gap-2"><span class="text-[14px] font-semibold">题目来源</span>
+      <div class="grid grid-cols-3 gap-2" role="radiogroup" aria-label="题目来源">${SOURCES.map((s) => {
+        const on = s.id === cur;
+        return `<button type="button" role="radio" data-source="${s.id}" aria-checked="${on}" class="flex cursor-pointer flex-col items-start gap-0.5 rounded-xl border-[1.5px] border-line bg-sheet px-2.5 py-2 text-left transition-colors aria-checked:border-accent aria-checked:bg-accent-soft">
+          <b class="text-[14.5px] ${on ? 'text-accent' : ''}">${s.name}</b><span class="text-[11.5px] leading-snug text-muted">${s.sub}</span></button>`;
+      }).join('')}</div>
+      <span class="text-[12.5px] text-muted">${note}</span></div>`;
   }
 
   function setStatus(st: string): void {
@@ -220,8 +246,8 @@ export function createTaskSettings({
     saveTimer = setTimeout(async () => {
       if (!cfg) return;
       try {
-        const { levels, dailyCount, autoDaily, dailyAt, accuracyBoost } = cfg;
-        cfg = await api.savePracticeSettings({ levels, dailyCount, autoDaily, dailyAt, accuracyBoost });
+        const { levels, questionSource, dailyCount, autoDaily, dailyAt, accuracyBoost } = cfg;
+        cfg = await api.savePracticeSettings({ levels, questionSource, dailyCount, autoDaily, dailyAt, accuracyBoost });
         setStatus('saved');
         onChange?.(cfg);
       } catch (e) {
@@ -249,6 +275,12 @@ export function createTaskSettings({
         : LEVELS.map((l) => l.id).filter((x) => x === id || c.levels.includes(x));
       save({ levels });
       A.pop(root.querySelector(`[data-level="${id}"]`));
+      return;
+    }
+    const src = closest(e, '[data-source]');
+    if (src) {
+      const id = src.dataset.source as QuestionSource;
+      if (id !== c.questionSource) save({ questionSource: id });
       return;
     }
     const a = closest(e, '[data-act]');

@@ -1,17 +1,21 @@
 // 练习设置：每天的任务出几句（1–10）、出四级还是六级（可以都选，混合随机）、
-// 每天几点自动生成（北京时间，也可以关掉自动生成），以及 AI 批改的“准确度提升”开关。
+// 每天几点自动生成（北京时间，也可以关掉自动生成）、题目来源（AI 出题 / 真题题库 / 先题库不够再 AI），
+// 以及 AI 批改的“准确度提升”开关。
 // 每个账户各存一份（accounts.practice）。
-import type { Level, PracticeSettings } from '@sentence-site/shared';
+import type { Level, PracticeSettings, QuestionSource } from '@sentence-site/shared';
 import type { AppConfig } from './config.ts';
 import * as repo from './repo.ts';
 import { HttpError, type JsonBody } from './http.ts';
 
 export const LEVELS: Level[] = ['CET-4', 'CET-6'];
 export const MAX_DAILY = 10;
+export const QUESTION_SOURCES: QuestionSource[] = ['ai', 'bank', 'bankFirst'];
+const isSource = (v: unknown): v is QuestionSource => (QUESTION_SOURCES as unknown[]).includes(v);
 
 /** 存在 accounts.practice 里的样子 */
 export interface StoredPractice {
   levels: Level[];
+  questionSource: QuestionSource;
   dailyCount: number;
   autoDaily: boolean;
   dailyAt: string;
@@ -42,6 +46,8 @@ export function createPractice(cfg: Pick<AppConfig, 'daily'>) {
   const serverDaily = cfg.daily?.enabled !== false;
   const defaults: StoredPractice = {
     levels: [...LEVELS],
+    // 默认照旧 AI 出题
+    questionSource: 'ai',
     dailyCount: clampCount(cfg.daily?.count, 5),
     autoDaily: true,
     // .env 里的时间只是默认值，每个账户可以在“设置”里改成自己的
@@ -57,6 +63,7 @@ export function createPractice(cfg: Pick<AppConfig, 'daily'>) {
       : base.levels;
     return {
       levels: levels.length ? levels : base.levels,
+      questionSource: isSource(raw.questionSource) ? raw.questionSource : base.questionSource,
       dailyCount: 'dailyCount' in raw ? clampCount(raw.dailyCount, base.dailyCount) : base.dailyCount,
       autoDaily: typeof raw.autoDaily === 'boolean' ? raw.autoDaily : base.autoDaily,
       dailyAt: normalizeTime(raw.dailyAt) || base.dailyAt,
@@ -87,6 +94,8 @@ export function createPractice(cfg: Pick<AppConfig, 'daily'>) {
       throw new HttpError(400, 'autoDaily 要是 true 或 false');
     if ('dailyAt' in body && !normalizeTime(body.dailyAt))
       throw new HttpError(400, '生成时间的格式是 时:分，比如 07:50');
+    if ('questionSource' in body && !isSource(body.questionSource))
+      throw new HttpError(400, '题目来源只能是 ai、bank 或 bankFirst');
     if ('accuracyBoost' in body && typeof body.accuracyBoost !== 'boolean')
       throw new HttpError(400, 'accuracyBoost 要是 true 或 false');
     const next = normalize(body, normalize(account.practice));

@@ -12,7 +12,7 @@ import type {
   Seg,
 } from '@sentence-site/shared';
 import { query } from './db.ts';
-import { BANK_STATUSES, type BankRow, type BankStatus } from './bank.ts';
+import { BANK_STATUSES, originText, type BankRow, type BankStatus } from './bank.ts';
 
 /** accounts 表的一行 */
 export interface AccountRow {
@@ -52,6 +52,8 @@ export interface NewSentence extends SentenceBody {
   source: SentenceSource;
   /** 句子所属的账户（导入旧数据时是 owner） */
   accountId: string;
+  /** 从真题题库复制来的：题库里那一句的编号 */
+  bankItemId?: number | null;
 }
 
 export interface NewAttempt {
@@ -79,8 +81,37 @@ export type UsageField = keyof UsageRow;
 
 type Count = { n: number };
 
-const SENTENCE_COLS = `id, to_json(created_at)#>>'{}' AS created, batch::text AS batch, source, level, focus,
-  segs, trunk, trunk_zh AS "trunkZh", trap, tip, ref, opts, words, phrases`;
+// 句子查询都 LEFT JOIN 题库，带出出处；接口只给出处的文字，不直接返回 bank_items 的行
+const SENTENCE_COLS = `s.id, to_json(s.created_at)#>>'{}' AS created, s.batch::text AS batch, s.source, s.level, s.focus,
+  s.segs, s.trunk, s.trunk_zh AS "trunkZh", s.trap, s.tip, s.ref, s.opts, s.words, s.phrases,
+  b.id IS NOT NULL AS "fromBank", b.level AS "bLevel", b.exam_year AS "bYear", b.exam_month AS "bMonth",
+  b.paper AS "bPaper", b.section AS "bSection", b.meta->'cloze' AS "bCloze"`;
+const SENTENCE_FROM = 'sentences s LEFT JOIN bank_items b ON b.id = s.bank_item_id';
+
+/** 查出来的一行：句子 + 题库出处的几列 */
+type SentenceRow = Sentence & {
+  fromBank: boolean;
+  bLevel: string | null;
+  bYear: number | null;
+  bMonth: number | null;
+  bPaper: number | null;
+  bSection: string | null;
+  bCloze: unknown;
+};
+
+function toSentence(r: SentenceRow): Sentence {
+  const { fromBank, bLevel, bYear, bMonth, bPaper, bSection, bCloze, ...s } = r;
+  if (!fromBank) return s;
+  const out: Sentence = {
+    ...s,
+    origin: originText({ level: bLevel, year: bYear, month: bMonth, paper: bPaper, section: bSection }),
+  };
+  const cloze = (Array.isArray(bCloze) ? (bCloze as { no?: unknown; word?: unknown }[]) : [])
+    .filter((c) => Number.isInteger(c?.no))
+    .map((c) => ({ no: Number(c.no), word: String(c.word ?? '') }));
+  if (cloze.length) out.cloze = cloze;
+  return out;
+}
 const RECORD_COLS = `sentence_id AS "sentenceId", done, verbs, choice, draft,
   to_json(first_at)#>>'{}' AS "firstAt", to_json(updated_at)#>>'{}' AS "updatedAt"`;
 const ATTEMPT_COLS = `id::int AS id, sentence_id AS "sentenceId", text, acc, flu, comp, total, feedback, model,
@@ -91,29 +122,29 @@ const json = (v: unknown): string | null => (v === undefined || v === null ? nul
 // ---- sentences ---------------------------------------------------------------
 // 句子都按账户隔离：除了全局计数，查询都要带 accountId，取不到别的账户的句子。
 export async function listSentences(accountId: string, since: string | null = null): Promise<Sentence[]> {
-  const { rows } = await query<Sentence>(
-    `SELECT ${SENTENCE_COLS} FROM sentences
-     WHERE account_id = $1 AND ($2::timestamptz IS NULL OR created_at > $2::timestamptz)
-     ORDER BY created_at, id`,
+  const { rows } = await query<SentenceRow>(
+    `SELECT ${SENTENCE_COLS} FROM ${SENTENCE_FROM}
+     WHERE s.account_id = $1 AND ($2::timestamptz IS NULL OR s.created_at > $2::timestamptz)
+     ORDER BY s.created_at, s.id`,
     [accountId, since],
   );
-  return rows;
+  return rows.map(toSentence);
 }
 
 export async function getSentence(accountId: string, id: string): Promise<Sentence | null> {
-  const { rows } = await query<Sentence>(`SELECT ${SENTENCE_COLS} FROM sentences WHERE id = $1 AND account_id = $2`, [
-    id,
-    accountId,
-  ]);
-  return rows[0] || null;
+  const { rows } = await query<SentenceRow>(
+    `SELECT ${SENTENCE_COLS} FROM ${SENTENCE_FROM} WHERE s.id = $1 AND s.account_id = $2`,
+    [id, accountId],
+  );
+  return rows[0] ? toSentence(rows[0]) : null;
 }
 
 export async function recentSentences(accountId: string, limit = 40): Promise<Sentence[]> {
-  const { rows } = await query<Sentence>(
-    `SELECT ${SENTENCE_COLS} FROM sentences WHERE account_id = $1 ORDER BY created_at DESC, id DESC LIMIT $2`,
+  const { rows } = await query<SentenceRow>(
+    `SELECT ${SENTENCE_COLS} FROM ${SENTENCE_FROM} WHERE s.account_id = $1 ORDER BY s.created_at DESC, s.id DESC LIMIT $2`,
     [accountId, limit],
   );
-  return rows;
+  return rows.map(toSentence);
 }
 
 /** 所有账户的句子总数（健康检查、首次启动导入用） */
@@ -134,12 +165,12 @@ export async function countDailyFor(accountId: string, day: string): Promise<num
   return rows[0]?.n ?? 0;
 }
 
-/** 已存在同 id 时跳过；返回是否真的插入了 */
+/** 已存在同 id、或者这个账户已经复制过这句题库句子时跳过；返回是否真的插入了 */
 export async function insertSentence(s: NewSentence): Promise<boolean> {
   const { rows } = await query<{ id: string }>(
-    `INSERT INTO sentences (id, created_at, batch, source, level, focus, segs, trunk, trunk_zh, trap, tip, ref, opts, words, phrases, account_id)
-     VALUES ($1, $2::timestamptz, $3::date, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16)
-     ON CONFLICT (id) DO NOTHING
+    `INSERT INTO sentences (id, created_at, batch, source, level, focus, segs, trunk, trunk_zh, trap, tip, ref, opts, words, phrases, account_id, bank_item_id)
+     VALUES ($1, $2::timestamptz, $3::date, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13::jsonb, $14::jsonb, $15::jsonb, $16, $17::bigint)
+     ON CONFLICT DO NOTHING
      RETURNING id`,
     [
       s.id,
@@ -158,9 +189,42 @@ export async function insertSentence(s: NewSentence): Promise<boolean> {
       json(s.words || []),
       json(s.phrases || []),
       s.accountId,
+      s.bankItemId ?? null,
     ],
   );
   return rows.length > 0;
+}
+
+/** 从题库抽到的一句：题库里的编号、难度、拆解 */
+export interface BankDraw {
+  id: number;
+  level: Level;
+  body: SentenceBody;
+}
+
+/**
+ * 从启用的题库里随机抽 n 句这个账户还没抽过的、标注好的句子（只读，不写入；写入用 insertSentence 带上 bankItemId）。
+ * levels：要哪几种难度。不调用模型，不占每日额度。
+ */
+export async function drawFromBank(accountId: string, levels: Level[], n: number): Promise<BankDraw[]> {
+  if (n < 1 || !levels.length) return [];
+  const { rows } = await query<BankDraw>(
+    `SELECT b.id::int AS id, b.level, b.body FROM bank_items b JOIN banks k ON k.id = b.bank_id AND k.enabled
+     WHERE b.status = 'ready' AND b.level = ANY($2::text[])
+       AND NOT EXISTS (SELECT 1 FROM sentences s WHERE s.account_id = $1 AND s.bank_item_id = b.id)
+     ORDER BY random() LIMIT $3`,
+    [accountId, `{${levels.join(',')}}`, n],
+  );
+  return rows;
+}
+
+/** 这个账户是不是已经复制过这句题库句子 */
+export async function hasBankCopy(accountId: string, bankItemId: number): Promise<boolean> {
+  const { rows } = await query<Count>(
+    'SELECT count(*)::int AS n FROM sentences WHERE account_id = $1 AND bank_item_id = $2',
+    [accountId, bankItemId],
+  );
+  return Number(rows[0]?.n ?? 0) > 0;
 }
 
 /** 只改谓语标注（segs）；返回是否找到这句 */

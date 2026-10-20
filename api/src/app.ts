@@ -211,18 +211,22 @@ export function createApp(
     body: await ai.reviewOne(account, params.id),
   }));
 
-  // kind=daily：生成（或补齐）今日任务；kind=extra（默认）：加练 count 句（1–10）。难度按“每日任务”设置
+  // kind=daily：生成（或补齐）今日任务；kind=extra（默认）：加练 count 句（1–10）。难度、题目来源按“每日任务”设置
   router.add('POST', '/api/sentences/generate', async ({ req, account }) => {
     const body = await readJson(req);
     const p = practiceSvc.get(account);
     if (body.kind === 'daily') {
       const n = p.dailyCount - (await repo.countDailyFor(account.id, shanghaiDate()));
       if (n <= 0) throw new HttpError(409, '今天的任务已经生成好了');
-      return { body: { added: await ai.generate(account, { source: 'daily', n, levels: p.levels }) } };
+      return {
+        body: { added: await ai.generate(account, { source: 'daily', n, levels: p.levels, from: p.questionSource }) },
+      };
     }
     const n = body.count === undefined ? 5 : Number(body.count);
     if (!Number.isInteger(n) || n < 1 || n > MAX_DAILY) throw new HttpError(400, `一次加练 1–${MAX_DAILY} 句`);
-    return { body: { added: await ai.generate(account, { source: 'extra', n, levels: p.levels }) } };
+    return {
+      body: { added: await ai.generate(account, { source: 'extra', n, levels: p.levels, from: p.questionSource }) },
+    };
   });
 
   // ---- 练习记录 ---------------------------------------------------------------
