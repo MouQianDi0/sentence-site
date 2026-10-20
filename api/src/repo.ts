@@ -84,11 +84,6 @@ const ATTEMPT_COLS = `id::int AS id, sentence_id AS "sentenceId", text, acc, flu
 
 const json = (v: unknown): string | null => (v === undefined || v === null ? null : JSON.stringify(v));
 
-// ---- schema ------------------------------------------------------------------
-export async function ensureSchema(sql: string): Promise<void> {
-  await query(sql);
-}
-
 // ---- sentences ---------------------------------------------------------------
 // 句子都按账户隔离：除了全局计数，查询都要带 accountId，取不到别的账户的句子。
 export async function listSentences(accountId: string, since: string | null = null): Promise<Sentence[]> {

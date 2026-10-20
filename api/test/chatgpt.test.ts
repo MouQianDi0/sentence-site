@@ -31,6 +31,7 @@ import {
   type AuthUrls,
 } from '../src/chatgpt-auth.ts';
 import * as repo from '../src/repo.ts';
+import { migrate } from '../src/migrate.ts';
 import { importExport } from '../src/importer.ts';
 import { createTestDb, startFakeLlm, startApp, type FakeLlm, type TestApp, type TestDb } from './helpers.ts';
 
@@ -798,7 +799,7 @@ let memberSentence = '';
 before(async () => {
   db = createTestDb(`sentence_chatgpt_${process.pid}`);
   setQueryImpl(db.query);
-  await repo.ensureSchema(await fs.readFile(new URL('../src/schema.sql', import.meta.url), 'utf8'));
+  await migrate();
   await importExport(JSON.parse(await fs.readFile(new URL('../seed/export.json', import.meta.url), 'utf8')));
   const grade = (level: string) => () => ({ acc: 20, flu: 15, comp: 15, issues: [], good: [], level, better: '' });
   domestic = await startFakeLlm({ grade: grade('国内批改'), lookup: () => ({ zh: '国内查词' }) });

@@ -6,6 +6,7 @@
 #   强制更新：  sudo sentence-update --force    （不看检查结果，出问题时临时用）
 #   定时任务用：sudo sentence-update --if-changed   （没有新代码、或检查没通过 / 还没跑完时什么都不做）
 # 只会改动仓库里的文件，.env、data/（数据库）和 backups/ 不会动。
+# 部署新版本前先运行 scripts/backup.sh 备份数据库（新版本启动时会执行数据库迁移）。
 set -euo pipefail
 
 SCHEDULED=0
@@ -128,6 +129,14 @@ deploy() {
 }
 
 log "更新 ${old:0:7} → ${new:0:7}：$(git log -1 --format=%s FETCH_HEAD)"
+# 新版本启动时会执行数据库迁移，先备份一次；备份失败只记下来，不挡更新（每天凌晨还有定时备份）
+if [[ "$old" != "none" ]]; then
+  if timeout 600 bash "$DIR/scripts/backup.sh"; then
+    log "更新前已备份数据库"
+  else
+    log "更新前备份数据库失败，继续更新（手动备份：sudo bash scripts/backup.sh）"
+  fi
+fi
 if deploy "$new"; then
   rm -f "$failed_file"
   docker image prune -f >/dev/null 2>&1 || true

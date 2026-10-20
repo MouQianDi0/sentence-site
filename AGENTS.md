@@ -11,6 +11,10 @@
 
 改任何和句子数据有关的东西之前（提示词、校验、知识点讲解、圈谓语 / 看结构页面），先读 `api/skills/sentence-spec/SKILL.md`。它是谓语标注、片段切分、知识点键、主干的唯一标准，后端会把其中 `<!-- prompt:… -->` 段放进给大模型的提示词。改规则时先改它，再同步 `api/src/validate.ts`、`api/src/predicates.ts`、`shared/src/kb.ts`。拆单词的规则在 `shared/src/text.ts` 的 `toks()` 和 `api/src/predicates.ts` 的 `wordsOf()` 两处，要保持一致。
 
+## 改表结构
+
+新增 `api/src/migrations/NNNN_说明.sql`（编号接着往下排），不改已发布的文件；启动时 `api/src/migrate.ts` 按编号执行没执行过的，记在 `schema_migrations` 表。文件里不写 `BEGIN`/`COMMIT`，不用 `CREATE INDEX CONCURRENTLY`（整份在一个事务里执行）。更新失败会退回上一个版本、旧代码跑在已升级的库上，所以会让旧代码写不进去的改动分扩、收两次发布。
+
 ## 账户
 
 数据按账户隔离：`sentences.account_id` 指向 `accounts`，记录、批改、查词缓存跟着句子走，`ai_usage`、`token_usage` 也带 `account_id`。调用模型时用 `tokens.ts` 的 `metered()` 包一层，用掉的 token 才会记到账户名下。`api/src/repo.ts` 里查句子的函数第一个参数都是 `accountId`，新写的查询也要带上，不能让一个账户读到别的账户的数据。你自己是 `owner`（访问密码登录），邀请账户是 `member`（邀请码登录）；只有 owner 能用 `/api/admin/*`。邀请账户的登录 Cookie 里带设备编号，每次请求都核对 `devices` 表，设备被移除就失效；还会核对 `accounts.expires_at`，邀请码过期了就返回 401 并说明原因（有效期从第一次登录开始算，见 `accounts.ts`）。模型配置按账户（`createSettingsHub`），邀请账户只用它自己填的 API 密钥，不能退回 `.env`。

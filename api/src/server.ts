@@ -1,8 +1,9 @@
-// 启动：检查配置 → 建表 → 首次启动时导入旧数据 → 开始监听 → 启动每日出题
+// 启动：检查配置 → 执行数据库迁移 → 首次启动时导入旧数据 → 开始监听 → 启动每日出题
 import http from 'node:http';
 import fs from 'node:fs/promises';
 import { config, assertConfig } from './config.ts';
 import { closeDb } from './db.ts';
+import { migrate } from './migrate.ts';
 import * as repo from './repo.ts';
 import { importExport } from './importer.ts';
 import { createLlm } from './llm.ts';
@@ -31,7 +32,7 @@ async function waitForDb(tries = 30) {
 async function main() {
   assertConfig(config);
   await waitForDb();
-  await repo.ensureSchema(await fs.readFile(new URL('./schema.sql', import.meta.url), 'utf8'));
+  await migrate();
 
   if ((await repo.countSentences()) === 0) {
     try {

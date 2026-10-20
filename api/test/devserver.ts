@@ -10,7 +10,7 @@ import { setQueryImpl } from '../src/db.ts';
 import { loadConfig } from '../src/config.ts';
 import { createApp } from '../src/app.ts';
 import { createLlm } from '../src/llm.ts';
-import * as repo from '../src/repo.ts';
+import { migrate } from '../src/migrate.ts';
 import { importExport } from '../src/importer.ts';
 import { createTestDb, startFakeLlm } from './helpers.ts';
 
@@ -25,7 +25,7 @@ const TYPES: Record<string, string> = {
 
 const db = createTestDb('sentence_dev');
 setQueryImpl(db.query);
-await repo.ensureSchema(await fs.readFile(new URL('../src/schema.sql', import.meta.url), 'utf8'));
+await migrate();
 await importExport(JSON.parse(await fs.readFile(new URL('../seed/export.json', import.meta.url), 'utf8')));
 
 let devSeq = 0;

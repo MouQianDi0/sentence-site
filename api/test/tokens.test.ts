@@ -7,6 +7,7 @@ import { loadConfig } from '../src/config.ts';
 import { createApp } from '../src/app.ts';
 import { createLlm } from '../src/llm.ts';
 import * as repo from '../src/repo.ts';
+import { migrate } from '../src/migrate.ts';
 import { importExport } from '../src/importer.ts';
 import { daysAgo } from '../src/tokens.ts';
 import { createTestDb, startFakeLlm, startApp, type FakeLlm, type TestApp, type TestDb } from './helpers.ts';
@@ -57,7 +58,7 @@ const kindOf = (s: TokenStats, kind: string) => s.byKind.find((k) => k.kind === 
 before(async () => {
   db = createTestDb(`sentence_tokens_${process.pid}`);
   setQueryImpl(db.query);
-  await repo.ensureSchema(await fs.readFile(new URL('../src/schema.sql', import.meta.url), 'utf8'));
+  await migrate();
   await importExport(JSON.parse(await fs.readFile(new URL('../seed/export.json', import.meta.url), 'utf8')));
   fake = await startFakeLlm({
     grade: () => gradeReply(),
@@ -241,9 +242,11 @@ test('第一次建表时，把以前批改记录里的用量补进来（只补�
     outputTokens: 567,
     createdAt: '2026-09-30T20:00:00Z', // 北京时间 10 月 1 日凌晨
   });
-  const schema = await fs.readFile(new URL('../src/schema.sql', import.meta.url), 'utf8');
-  await repo.ensureSchema(schema);
-  await repo.ensureSchema(schema);
+  // 老库没有 schema_migrations：启动时 0001 会在已有数据上整份再执行一遍；执行两遍也只补一次
+  for (let i = 0; i < 2; i++) {
+    db.raw('DROP TABLE schema_migrations');
+    await migrate();
+  }
   const row = await repo.listTokens('owner', '2026-10-01');
   const legacy = row.filter((r) => r.model === 'legacy-model');
   assert.deepEqual(legacy, [

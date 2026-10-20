@@ -1,12 +1,12 @@
 // 邀请码有效期：从第一次登录开始算；到期后登不进来、已登录的也退出，数据保留；管理员改有效期就续上
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'node:fs/promises';
 import { setQueryImpl } from '../src/db.ts';
 import { loadConfig } from '../src/config.ts';
 import { createApp } from '../src/app.ts';
 import { createLlm } from '../src/llm.ts';
 import * as repo from '../src/repo.ts';
+import { migrate } from '../src/migrate.ts';
 import { createTestDb, startFakeLlm, startApp, type FakeLlm, type TestApp, type TestDb } from './helpers.ts';
 import type { RequestListener } from 'node:http';
 import type { Invite } from '@sentence-site/shared';
@@ -26,7 +26,7 @@ const expireNow = (id: string) =>
 before(async () => {
   db = createTestDb(`sentence_expiry_${process.pid}`);
   setQueryImpl(db.query);
-  await repo.ensureSchema(await fs.readFile(new URL('../src/schema.sql', import.meta.url), 'utf8'));
+  await migrate();
   fake = await startFakeLlm({ grade: () => ({}), lookup: () => ({}), generate: () => ({}) });
   const cfg = loadConfig({ ACCESS_PASSWORD: 'owner-pw-1', COOKIE_SECRET: 'e'.repeat(64) });
   handler = createApp(cfg, { llm: createLlm(cfg), log: quiet });
@@ -192,10 +192,14 @@ test('有效期功能上线前就登录过的账户：用最早登录的设备�
     `UPDATE devices SET first_seen = '2026-09-01T00:00:00Z' WHERE account_id = '${inv.id}';
      UPDATE accounts SET activated_at = NULL WHERE id = '${inv.id}'`,
   );
-  await repo.ensureSchema(await fs.readFile(new URL('../src/schema.sql', import.meta.url), 'utf8'));
+  // 老库没有 schema_migrations：启动时 0001 会在已有数据上整份再执行一遍
+  db.raw('DROP TABLE schema_migrations');
+  await migrate();
   assert.equal(Date.parse((await invite(inv.id)).activatedAt ?? ''), Date.parse('2026-09-01T00:00:00Z'));
   // 没登录过的不受影响
   const fresh = (await owner.api('POST', '/api/admin/invites', { note: '新的' })).body.invite;
-  await repo.ensureSchema(await fs.readFile(new URL('../src/schema.sql', import.meta.url), 'utf8'));
+  // 老库没有 schema_migrations：启动时 0001 会在已有数据上整份再执行一遍
+  db.raw('DROP TABLE schema_migrations');
+  await migrate();
   assert.equal((await invite(fresh.id)).activatedAt, null);
 });

@@ -6,7 +6,7 @@ import { setQueryImpl } from '../src/db.ts';
 import { loadConfig } from '../src/config.ts';
 import { createApp } from '../src/app.ts';
 import { createLlm } from '../src/llm.ts';
-import * as repo from '../src/repo.ts';
+import { migrate } from '../src/migrate.ts';
 import { importExport } from '../src/importer.ts';
 import { newCode, normalizeCode } from '../src/accounts.ts';
 import { createTestDb, startFakeLlm, startApp, type FakeLlm, type TestApp, type TestDb } from './helpers.ts';
@@ -55,7 +55,7 @@ const configure = (m: TestApp, apiKey = 'member-key') =>
 before(async () => {
   db = createTestDb(`sentence_accounts_${process.pid}`);
   setQueryImpl(db.query);
-  await repo.ensureSchema(await fs.readFile(new URL('../src/schema.sql', import.meta.url), 'utf8'));
+  await migrate();
   await importExport(JSON.parse(await fs.readFile(new URL('../seed/export.json', import.meta.url), 'utf8')));
   fake = await startFakeLlm({
     grade: () => ({ acc: 30, flu: 20, comp: 20, issues: [], good: [], level: 'ok', better: '' }),

@@ -9,6 +9,7 @@ import { createLlm } from '../src/llm.ts';
 import { normalizeBaseUrl } from '../src/settings.ts';
 import { encrypt, decrypt, maskKey } from '../src/secret.ts';
 import * as repo from '../src/repo.ts';
+import { migrate } from '../src/migrate.ts';
 import { importExport } from '../src/importer.ts';
 import { createTestDb, startFakeLlm, startApp, type FakeLlm, type TestApp, type TestDb } from './helpers.ts';
 import type { AppConfig, LlmConfig } from '../src/config.ts';
@@ -20,7 +21,7 @@ let db: TestDb, fake: FakeLlm, app: TestApp, cfg: AppConfig;
 before(async () => {
   db = createTestDb(`sentence_settings_${process.pid}`);
   setQueryImpl(db.query);
-  await repo.ensureSchema(await fs.readFile(new URL('../src/schema.sql', import.meta.url), 'utf8'));
+  await migrate();
   await importExport(JSON.parse(await fs.readFile(new URL('../seed/export.json', import.meta.url), 'utf8')));
   fake = await startFakeLlm({
     grade: () => ({ acc: 30, flu: 20, comp: 20, issues: [], good: [], level: 'ok', better: '' }),

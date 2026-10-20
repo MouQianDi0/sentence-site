@@ -2,6 +2,32 @@
 
 所有代码变更都记在这里，新的在最上面。时间是北京时间。
 
+## 2026-10-20 15:20:20
+
+**变更类型**：重构（数据库）
+
+**变更概述**：建表从每次启动整份执行 `schema.sql` 改成按编号执行迁移文件，执行过的记在 `schema_migrations` 表。数据库结构不变。这是数据库改进的第 1 步，后面改表结构都用新加迁移文件的方式。
+
+**修改的文件**
+
+- 移动 `api/src/schema.sql` → `api/src/migrations/0001_baseline.sql`（内容不变）
+- 新增 `api/src/migrate.ts`
+- 新增 `api/test/migrate.test.ts`
+- 修改 `api/src/server.ts`、`api/src/repo.ts`
+- 修改 `api/test/devserver.ts`、`api/test/accounts.test.ts`、`api/test/api.test.ts`、`api/test/chatgpt.test.ts`、`api/test/expiry.test.ts`、`api/test/settings.test.ts`、`api/test/tokens.test.ts`
+- 修改 `scripts/update.sh`
+- 修改 `README.md`、`AGENTS.md`、`CHANGELOG.md`
+
+**具体内容**
+
+- `migrate()`：建 `schema_migrations`（version、name、applied_at），读 `api/src/migrations/` 里 `NNNN_说明.sql` 格式的文件，按编号执行还没执行过的。每个文件和它那条 `schema_migrations` 记录拼成一次查询发出，在同一个事务里，出错整份不生效。迁移文件里不能写 `BEGIN`/`COMMIT`，不能用 `CREATE INDEX CONCURRENTLY`。只有一个 api 容器，不加锁。
+- 老库（服务器上现在的库）没有 `schema_migrations`，第一次启动新版本时 0001 会在已有的表上再执行一遍。它本来就是每次启动都执行的，可以重复执行，结构和数据都不变；之后就只记一条 0001，不再重复执行。
+- 退回上一个版本时，旧代码照旧整份执行 `schema.sql`，多出来的 `schema_migrations` 表不影响它。
+- 去掉 `repo.ensureSchema()`；启动、本地演示服务器和测试都改用 `migrate()`。测试“老库升级”的地方（有效期补第一次登录时间、补以前批改的用量）改成删掉 `schema_migrations` 再 `migrate()`，模拟老库第一次升级。
+- 新测试：同一个库连续 `migrate()` 两次，第二次什么都不执行；`schema_migrations` 里有 0001；没有 `schema_migrations` 的老库再执行 0001，已有数据不变。
+- `scripts/update.sh`：部署新版本前先运行 `scripts/backup.sh` 备份数据库；备份失败只记日志，不挡更新。第一次部署（还没有旧版本）不备份。
+- `AGENTS.md` 加“改表结构”一节：新增迁移文件、不改已发布的文件、会让旧代码写不进去的改动分扩、收两次发布。
+
 ## 2026-10-19 02:26:41
 
 **变更类型**：修复问题（部署脚本）

@@ -8,6 +8,7 @@ import { createApp } from '../src/app.ts';
 import { createLlm } from '../src/llm.ts';
 import { createAi } from '../src/ai.ts';
 import * as repo from '../src/repo.ts';
+import { migrate } from '../src/migrate.ts';
 import { importExport } from '../src/importer.ts';
 import { createTestDb, startFakeLlm, startApp, type FakeLlm, type TestApp, type TestDb } from './helpers.ts';
 import type { AppConfig } from '../src/config.ts';
@@ -63,7 +64,7 @@ let generateReplyGetter: (prompt?: string) => unknown = () => null;
 before(async () => {
   db = createTestDb();
   setQueryImpl(db.query);
-  await repo.ensureSchema(await fs.readFile(new URL('../src/schema.sql', import.meta.url), 'utf8'));
+  await migrate();
   llmServer = await startFakeLlm({
     grade: () => gradeReplyGetter(),
     summary: (prompt) => summaryReplyGetter(prompt),

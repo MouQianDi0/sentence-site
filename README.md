@@ -20,7 +20,7 @@ sudo sentence-update            # 检查还在跑时最多等 10 分钟；没通
 sudo sentence-update --force    # 不看检查结果，强制部署（出问题时临时用）
 ```
 
-更新只会改仓库里的文件，`.env`、`data/`（数据库）和 `backups/` 不会动。更新时在服务器上构建 api 和 web 两个镜像（npm 依赖走腾讯云镜像，可以在 `.env` 里用 `NPM_REGISTRY=` 换别的源）。新版本启动失败（健康检查不通过）会自动退回上一个版本，定时任务也不会反复尝试这个失败的版本。更新日志：`sudo tail -n 30 /var/log/sentence-site-update.log`。关掉自动更新：`sudo rm /etc/cron.d/sentence-site-update`。
+更新只会改仓库里的文件，`.env`、`data/`（数据库）和 `backups/` 不会动。更新时在服务器上构建 api 和 web 两个镜像（npm 依赖走腾讯云镜像，可以在 `.env` 里用 `NPM_REGISTRY=` 换别的源）。部署前会先备份一次数据库（`scripts/backup.sh`，备份失败不挡更新）。新版本启动失败（健康检查不通过）会自动退回上一个版本，定时任务也不会反复尝试这个失败的版本。更新日志：`sudo tail -n 30 /var/log/sentence-site-update.log`。关掉自动更新：`sudo rm /etc/cron.d/sentence-site-update`。
 
 ### 第一次接入（已经用压缩包部署过的服务器，只需要做一次）
 
@@ -246,7 +246,8 @@ Clash 装在宿主机上（不在 Docker 里）时，不用第 3 步，`.env` �
 ```
 shared/      前后端共用：接口数据类型（types.ts）、句子文本工具（text.ts）、知识点（kb.ts）
 api/         后端（TypeScript，Node 直接运行）
-  src/       接口、AI、数据库、每日出题；schema.sql 是建表语句
+  src/       接口、AI、数据库、每日出题
+    migrations/  数据库迁移 NNNN_说明.sql，启动时按编号执行没执行过的（记在 schema_migrations 表）
   test/      测试（node --test）、本地演示服务器 devserver.ts
   skills/    出题规范 SKILL.md
 web/         前端（Vite + TypeScript）
