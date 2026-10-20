@@ -67,7 +67,7 @@ export async function importExport(data: unknown, log: (msg: string) => void = (
     if (first) fields.firstAt = first;
     if (updated) fields.updatedAt = updated;
     if (Object.keys(fields).length) {
-      await repo.upsertRecord(sid, fields);
+      await repo.upsertRecord('owner', sid, fields);
       summary.records += 1;
     }
 
@@ -80,6 +80,7 @@ export async function importExport(data: unknown, log: (msg: string) => void = (
         const rfb = obj(r.fb);
         const fb = rfb && rfb.text === a.text ? rfb : null;
         await repo.insertAttempt({
+          accountId: 'owner',
           sentenceId: sid,
           text: a.text.slice(0, 500),
           acc: int(a.acc, 40),

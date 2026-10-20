@@ -2,6 +2,27 @@
 
 所有代码变更都记在这里，新的在最上面。时间是北京时间。
 
+## 2026-10-20 15:37:01
+
+**变更类型**：重构（数据库）
+
+**变更概述**：练习记录、批改、查词缓存三张表加上 `account_id`，按句子回填，新写入时带上。这是数据库改进的第 2 步，只做“扩”：新列可空、没有默认值和外键，上一版代码不写它也照常读写。读数据还是按句子查，第 3 步再收紧。
+
+**修改的文件**
+
+- 新增 `api/src/migrations/0002_child_account_id.sql`
+- 修改 `api/src/repo.ts`、`api/src/app.ts`、`api/src/ai.ts`、`api/src/importer.ts`
+- 修改 `api/test/migrate.test.ts`、`api/test/accounts.test.ts`、`api/test/tokens.test.ts`
+- 修改 `CHANGELOG.md`
+
+**具体内容**
+
+- 迁移 0002：`sentences` 加唯一约束 `(account_id, id)`（第 3 步的复合外键要引用它）；`records`、`attempts`、`dict_cache` 加可空的 `account_id text`，按 `sentence_id` 从 `sentences` 回填；`attempts_created_at_idx` 换成 `attempts_account_idx (account_id, created_at DESC)` 和 `attempts_sentence_idx (sentence_id, created_at DESC)`，新增 `records_account_idx (account_id, updated_at DESC)`。整份可以重复执行。
+- `repo.upsertRecord(accountId, sentenceId, fields)`、`repo.putDict(accountId, sentenceId, word, data)` 第一个参数改成账户；`NewAttempt` 加必填的 `accountId`。写入时都带上 `account_id`，更新已有的练习记录、查词缓存时也补上。导入旧数据时账户是 `owner`。
+- 读的查询（`listRecords`、`listAttempts`、`getDict`、`countAttemptsFor`）不变，仍按句子查。
+- 更新失败退回上一版时，旧代码写的新行 `account_id` 为空；第 3 步会先再回填一次，再设 `NOT NULL`、外键换成 `(account_id, sentence_id) → sentences(account_id, id)`。
+- 新测试：迁移前写入的老数据（owner 和邀请账户各一句）三张表都按句子回填了 `account_id`；owner 和邀请账户新写的练习记录、批改、查词缓存带着各自的 `account_id`。
+
 ## 2026-10-20 15:20:20
 
 **变更类型**：重构（数据库）

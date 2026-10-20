@@ -230,6 +230,7 @@ test('各账户只看得到自己的用量；管理员在邀请码页看到每�
 test('第一次建表时，把以前批改记录里的用量补进来（只补一次）', async () => {
   db.raw('DROP TABLE token_usage');
   await repo.insertAttempt({
+    accountId: 'owner',
     sentenceId: 's-20261013-03',
     text: '以前的批改',
     acc: 30,

@@ -269,6 +269,7 @@ export function createAi({
 
     const calls = [...runs.map((r) => r.result), ...(summary ? [summary] : [])];
     const attempt = await repo.insertAttempt({
+      accountId: account.id,
       sentenceId: sentence.id,
       text,
       acc,
@@ -386,7 +387,7 @@ export function createAi({
       more: str(d.more, 80),
     };
     if (!data.zh) throw new HttpError(502, '没查到这个词的意思');
-    await repo.putDict(sentence.id, word, data);
+    await repo.putDict(account.id, sentence.id, word, data);
     await repo.bumpUsage(account.id, shanghaiDate(), 'lookups');
     return { word, data, cached: false };
   }

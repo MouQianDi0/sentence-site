@@ -227,7 +227,7 @@ export function createApp(
     const sentenceId = params.sentenceId;
     if (!(await repo.getSentence(account.id, sentenceId))) throw new HttpError(404, '句子不存在');
     try {
-      return { body: { record: await repo.upsertRecord(sentenceId, checked.fields) } };
+      return { body: { record: await repo.upsertRecord(account.id, sentenceId, checked.fields) } };
     } catch (e) {
       if ((e as { code?: string } | null)?.code === '23503') throw new HttpError(404, '句子不存在');
       throw e;

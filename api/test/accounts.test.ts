@@ -183,6 +183,38 @@ test('每个账户的句库、记录、批改、用量、每日任务设置互�
   }
 });
 
+test('新写入的练习记录、批改、查词缓存带着句子所属账户的 account_id', async () => {
+  const inv = (await owner.api('POST', '/api/admin/invites', { note: '小周' })).body.invite;
+  const m = await client();
+  try {
+    await m.api('POST', '/api/unlock', { password: inv.code });
+    await configure(m);
+    const [mid] = (await m.api('POST', '/api/sentences/generate', { kind: 'extra', count: 1 })).body.added;
+    const oid = (await owner.api('GET', '/api/sentences')).body.sentences[1].id;
+    const memberId = String(db.raw(`SELECT account_id FROM sentences WHERE id = '${mid}'`)).trim();
+    assert.match(memberId, /^m[0-9a-f]{10}$/);
+
+    for (const [app, sid, accountId] of [
+      [owner, oid, 'owner'],
+      [m, mid, memberId],
+    ] as const) {
+      assert.equal((await app.api('PUT', `/api/records/${sid}`, { done: true })).status, 200);
+      assert.equal((await app.api('PUT', `/api/records/${sid}`, { draft: '草稿' })).status, 200, '更新已有记录');
+      assert.equal((await app.api('POST', '/api/grade', { sentenceId: sid, text: '尽管远程办公很灵活' })).status, 200);
+      assert.equal((await app.api('POST', '/api/lookup', { sentenceId: sid, word: 'zzaccount' })).status, 200);
+      for (const sql of [
+        `SELECT account_id FROM records WHERE sentence_id = '${sid}'`,
+        `SELECT DISTINCT account_id FROM attempts WHERE sentence_id = '${sid}' AND text = '尽管远程办公很灵活'`,
+        `SELECT account_id FROM dict_cache WHERE sentence_id = '${sid}' AND word = 'zzaccount'`,
+      ]) {
+        assert.equal(db.raw(sql).trim(), accountId, sql);
+      }
+    }
+  } finally {
+    m.close();
+  }
+});
+
 test('邀请账户用自己填的模型和 API 密钥，看不到也用不到你的', async () => {
   const inv = (await owner.api('POST', '/api/admin/invites', { note: '自带密钥' })).body.invite;
   const m = await client();

@@ -53,6 +53,8 @@ export interface NewSentence extends SentenceBody {
 }
 
 export interface NewAttempt {
+  /** 句子所属的账户 */
+  accountId: string;
   sentenceId: string;
   text: string;
   acc: number | null;
@@ -199,11 +201,16 @@ const RECORD_FIELDS: Record<keyof RecordFields, { col: string; cast: string; val
 };
 
 /** 只写传进来的字段；记录不存在时新建。句子不存在时抛出外键错误（23503）。调用前先确认句子属于当前账户 */
-export async function upsertRecord(sentenceId: string, fields: RecordFields): Promise<PracticeRecord> {
-  const cols = ['sentence_id'];
-  const vals = ['$1'];
-  const params: unknown[] = [sentenceId];
-  const sets: string[] = [];
+export async function upsertRecord(
+  accountId: string,
+  sentenceId: string,
+  fields: RecordFields,
+): Promise<PracticeRecord> {
+  const cols = ['account_id', 'sentence_id'];
+  const vals = ['$1', '$2'];
+  const params: unknown[] = [accountId, sentenceId];
+  // 退回上一版期间写的行 account_id 是空的，更新时补上
+  const sets: string[] = ['account_id = EXCLUDED.account_id'];
   for (const [key, value] of Object.entries(fields)) {
     const f = RECORD_FIELDS[key as keyof RecordFields];
     if (!f) continue;
@@ -244,10 +251,11 @@ export async function listAttempts(accountId: string, sentenceId: string | null 
 
 export async function insertAttempt(a: NewAttempt): Promise<Attempt> {
   const { rows } = await query<Attempt>(
-    `INSERT INTO attempts (sentence_id, text, acc, flu, comp, total, feedback, model, input_tokens, output_tokens, created_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, COALESCE($11::timestamptz, now()))
+    `INSERT INTO attempts (account_id, sentence_id, text, acc, flu, comp, total, feedback, model, input_tokens, output_tokens, created_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11, COALESCE($12::timestamptz, now()))
      RETURNING ${ATTEMPT_COLS}`,
     [
+      a.accountId,
       a.sentenceId,
       a.text,
       a.acc,
@@ -280,11 +288,11 @@ export async function getDict(sentenceId: string, word: string): Promise<unknown
   return rows[0]?.data || null;
 }
 
-export async function putDict(sentenceId: string, word: string, data: unknown): Promise<void> {
+export async function putDict(accountId: string, sentenceId: string, word: string, data: unknown): Promise<void> {
   await query(
-    `INSERT INTO dict_cache (sentence_id, word, data) VALUES ($1, $2, $3::jsonb)
-     ON CONFLICT (sentence_id, word) DO UPDATE SET data = EXCLUDED.data`,
-    [sentenceId, word, json(data)],
+    `INSERT INTO dict_cache (account_id, sentence_id, word, data) VALUES ($1, $2, $3, $4::jsonb)
+     ON CONFLICT (sentence_id, word) DO UPDATE SET account_id = EXCLUDED.account_id, data = EXCLUDED.data`,
+    [accountId, sentenceId, word, json(data)],
   );
 }
 
