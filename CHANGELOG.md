@@ -2,6 +2,27 @@
 
 所有代码变更都记在这里，新的在最上面。时间是北京时间。
 
+## 2026-10-21 00:19:14
+
+**变更类型**：重构（数据库）
+
+**变更概述**：数据库改进第 3 步（“收”）：练习记录、批改、查词缓存的 `account_id` 改成 NOT NULL，外键换成 `(account_id, sentence_id)` → `sentences(account_id, id)`，一个账户写不到别的账户的句子上由数据库保证；读也直接按 `account_id` 查。`sentences`、`ai_usage` 的 `account_id` 去掉默认值，忘了传账户会报错，不再悄悄记到 owner。要等服务器部署过第 2 步再合进 `main`（更新失败退回第 2 步时，第 2 步的代码已经会写 `account_id`）。
+
+**修改的文件**
+
+- 新增 `api/src/migrations/0003_child_account_fk.sql`
+- 修改 `api/src/repo.ts`、`api/src/ai.ts`、`api/src/importer.ts`
+- 修改 `api/test/migrate.test.ts`、`api/test/accounts.test.ts`、`api/test/api.test.ts`
+- 修改 `CHANGELOG.md`
+
+**具体内容**
+
+- 迁移先再回填一次 `account_id` 为空的行（退回上一版期间写入的），删掉 `sentence_id` 为空的批改，再设 NOT NULL（含 `attempts.sentence_id`）、换外键（删除句子仍连带删除）。整份可以重复执行。
+- `listRecords`、`listAttempts` 改成 `WHERE account_id = $1`；`getDict`、`countAttemptsFor` 加上 `accountId` 参数。
+- `insertSentence` 的 `accountId` 改成必填，导入旧数据时传 `'owner'`。
+- 写入已有记录、查词缓存时也写一遍 `account_id`，别的账户的会因外键报 23503，改不掉。
+- 测试：别的账户写练习记录、批改、查词缓存，接口返回 404、直接调 repo 报 23503；模拟第 2 步老库验证回填和删除；不传 `account_id` 插入句子、AI 用量报错。
+
 ## 2026-10-21 00:03:07
 
 **变更类型**：测试

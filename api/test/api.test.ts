@@ -764,6 +764,7 @@ test('做题时修正：按单词位置改谓语，或让 AI 复查这一句', a
     created: new Date().toISOString(),
     batch: '2026-10-14',
     source: 'extra' as SentenceSource,
+    accountId: 'owner',
   } as NewSentence;
   await repo.insertSentence(s);
   // 单词下标：0 The 1 professor 2 explained 3 that 4 the 5 experiment, 6 conducted 7 last 8 week, 9 had 10 failed

@@ -40,6 +40,7 @@ export async function importExport(data: unknown, log: (msg: string) => void = (
       created,
       batch: typeof raw.batch === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(raw.batch) ? raw.batch : created.slice(0, 10),
       source: SOURCES.find((x) => x === raw.source) ?? 'seed',
+      accountId: 'owner',
     });
     if (inserted) summary.sentences += 1;
     known.add(id);
@@ -74,7 +75,7 @@ export async function importExport(data: unknown, log: (msg: string) => void = (
     const attempts = arr(r.attempts)
       .filter((a): a is Loose & { text: string } => typeof a.text === 'string' && Boolean(a.text.trim()))
       .sort((a, b) => String(a.at).localeCompare(String(b.at)));
-    if (attempts.length && (await repo.countAttemptsFor(sid)) === 0) {
+    if (attempts.length && (await repo.countAttemptsFor('owner', sid)) === 0) {
       for (const a of attempts) {
         // 旧页面只保存了最近一次的完整点评
         const rfb = obj(r.fb);

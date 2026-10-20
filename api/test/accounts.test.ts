@@ -8,6 +8,7 @@ import { createApp } from '../src/app.ts';
 import { createLlm } from '../src/llm.ts';
 import { migrate } from '../src/migrate.ts';
 import { importExport } from '../src/importer.ts';
+import * as repo from '../src/repo.ts';
 import { newCode, normalizeCode } from '../src/accounts.ts';
 import { createTestDb, startFakeLlm, startApp, type FakeLlm, type TestApp, type TestDb } from './helpers.ts';
 import type { AppConfig } from '../src/config.ts';
@@ -210,6 +211,57 @@ test('新写入的练习记录、批改、查词缓存带着句子所属账户�
         assert.equal(db.raw(sql).trim(), accountId, sql);
       }
     }
+  } finally {
+    m.close();
+  }
+});
+
+test('数据库保证写不到别的账户的句子上：练习记录、批改、查词缓存都报外键错误 23503', async () => {
+  const inv = (await owner.api('POST', '/api/admin/invites', { note: '小吴' })).body.invite;
+  const m = await client();
+  try {
+    await m.api('POST', '/api/unlock', { password: inv.code });
+    const oid = (await owner.api('GET', '/api/sentences')).body.sentences[2].id;
+    const fk = (e: unknown) => (e as { code?: string }).code === '23503';
+
+    // 接口：别的账户的句子一律 404
+    assert.equal((await m.api('PUT', `/api/records/${oid}`, { done: true })).status, 404);
+    assert.equal((await m.api('POST', '/api/grade', { sentenceId: oid, text: '译文' })).status, 404);
+    assert.equal((await m.api('POST', '/api/lookup', { sentenceId: oid, word: 'work' })).status, 404);
+
+    // 绕过接口直接写：句子还没有记录、缓存时
+    await assert.rejects(repo.upsertRecord(inv.id, oid, { done: true }), fk);
+    await assert.rejects(
+      repo.insertAttempt({
+        accountId: inv.id,
+        sentenceId: oid,
+        text: '译文',
+        acc: 1,
+        flu: 1,
+        comp: 1,
+        total: 3,
+        feedback: null,
+      }),
+      fk,
+    );
+    await assert.rejects(repo.putDict(inv.id, oid, 'zzfk', { zh: '别人的' }), fk);
+
+    // owner 已经有记录、缓存时，也改不掉 owner 的
+    await repo.upsertRecord('owner', oid, { draft: 'owner 的草稿' });
+    await repo.putDict('owner', oid, 'zzfk', { zh: 'owner 的' });
+    await assert.rejects(repo.upsertRecord(inv.id, oid, { draft: '别人的草稿' }), fk);
+    await assert.rejects(repo.putDict(inv.id, oid, 'zzfk', { zh: '别人的' }), fk);
+    assert.equal(
+      db.raw(`SELECT account_id || ':' || draft FROM records WHERE sentence_id = '${oid}'`).trim(),
+      'owner:owner 的草稿',
+    );
+    assert.deepEqual(await repo.getDict('owner', oid, 'zzfk'), { zh: 'owner 的' });
+
+    // 读也按账户：别的账户查不到 owner 的缓存、批改
+    assert.equal(await repo.getDict(inv.id, oid, 'zzfk'), null);
+    assert.equal(await repo.countAttemptsFor(inv.id, oid), 0);
+    assert.deepEqual(await repo.listRecords(inv.id), []);
+    assert.deepEqual(await repo.listAttempts(inv.id, oid), []);
   } finally {
     m.close();
   }

@@ -48,8 +48,8 @@ export interface NewSentence extends SentenceBody {
   created: string;
   batch: string;
   source: SentenceSource;
-  /** 不传时归到 owner（导入旧数据用） */
-  accountId?: string;
+  /** 句子所属的账户（导入旧数据时是 owner） */
+  accountId: string;
 }
 
 export interface NewAttempt {
@@ -132,7 +132,7 @@ export async function countDailyFor(accountId: string, day: string): Promise<num
   return rows[0]?.n ?? 0;
 }
 
-/** 已存在同 id 时跳过；返回是否真的插入了。accountId 不传时归到 owner（导入旧数据用） */
+/** 已存在同 id 时跳过；返回是否真的插入了 */
 export async function insertSentence(s: NewSentence): Promise<boolean> {
   const { rows } = await query<{ id: string }>(
     `INSERT INTO sentences (id, created_at, batch, source, level, focus, segs, trunk, trunk_zh, trap, tip, ref, opts, words, phrases, account_id)
@@ -155,7 +155,7 @@ export async function insertSentence(s: NewSentence): Promise<boolean> {
       json(s.opts),
       json(s.words || []),
       json(s.phrases || []),
-      s.accountId || 'owner',
+      s.accountId,
     ],
   );
   return rows.length > 0;
@@ -180,7 +180,7 @@ export async function deleteSentence(accountId: string, id: string): Promise<boo
 export async function listRecords(accountId: string): Promise<PracticeRecord[]> {
   const { rows } = await query<PracticeRecord>(
     `SELECT ${RECORD_COLS} FROM records
-     WHERE sentence_id IN (SELECT id FROM sentences WHERE account_id = $1)
+     WHERE account_id = $1
      ORDER BY updated_at DESC`,
     [accountId],
   );
@@ -200,7 +200,10 @@ const RECORD_FIELDS: Record<keyof RecordFields, { col: string; cast: string; val
   updatedAt: { col: 'updated_at', cast: '::timestamptz', val: same },
 };
 
-/** 只写传进来的字段；记录不存在时新建。句子不存在时抛出外键错误（23503）。调用前先确认句子属于当前账户 */
+/**
+ * 只写传进来的字段；记录不存在时新建。句子不存在或不属于 accountId 时抛出外键错误（23503），
+ * 数据库保证写不到别的账户的句子上
+ */
 export async function upsertRecord(
   accountId: string,
   sentenceId: string,
@@ -209,7 +212,7 @@ export async function upsertRecord(
   const cols = ['account_id', 'sentence_id'];
   const vals = ['$1', '$2'];
   const params: unknown[] = [accountId, sentenceId];
-  // 退回上一版期间写的行 account_id 是空的，更新时补上
+  // 记录已存在时也写一遍 account_id：别的账户的记录会因外键报 23503，不会被改掉
   const sets: string[] = ['account_id = EXCLUDED.account_id'];
   for (const [key, value] of Object.entries(fields)) {
     const f = RECORD_FIELDS[key as keyof RecordFields];
@@ -240,8 +243,7 @@ export async function countRecords(): Promise<number> {
 export async function listAttempts(accountId: string, sentenceId: string | null = null): Promise<Attempt[]> {
   const { rows } = await query<Attempt>(
     `SELECT ${ATTEMPT_COLS} FROM attempts
-     WHERE sentence_id IN (SELECT id FROM sentences WHERE account_id = $1)
-       AND ($2::text IS NULL OR sentence_id = $2)
+     WHERE account_id = $1 AND ($2::text IS NULL OR sentence_id = $2)
      ORDER BY created_at DESC, id DESC
      LIMIT 1000`,
     [accountId, sentenceId],
@@ -249,6 +251,7 @@ export async function listAttempts(accountId: string, sentenceId: string | null 
   return rows;
 }
 
+/** 句子不存在或不属于 a.accountId 时抛出外键错误（23503） */
 export async function insertAttempt(a: NewAttempt): Promise<Attempt> {
   const { rows } = await query<Attempt>(
     `INSERT INTO attempts (account_id, sentence_id, text, acc, flu, comp, total, feedback, model, input_tokens, output_tokens, created_at)
@@ -274,20 +277,24 @@ export async function insertAttempt(a: NewAttempt): Promise<Attempt> {
   return row;
 }
 
-export async function countAttemptsFor(sentenceId: string): Promise<number> {
-  const { rows } = await query<Count>('SELECT count(*)::int AS n FROM attempts WHERE sentence_id = $1', [sentenceId]);
+export async function countAttemptsFor(accountId: string, sentenceId: string): Promise<number> {
+  const { rows } = await query<Count>(
+    'SELECT count(*)::int AS n FROM attempts WHERE account_id = $1 AND sentence_id = $2',
+    [accountId, sentenceId],
+  );
   return rows[0]?.n ?? 0;
 }
 
 // ---- dict cache --------------------------------------------------------------
-export async function getDict(sentenceId: string, word: string): Promise<unknown> {
-  const { rows } = await query<{ data: unknown }>('SELECT data FROM dict_cache WHERE sentence_id = $1 AND word = $2', [
-    sentenceId,
-    word,
-  ]);
+export async function getDict(accountId: string, sentenceId: string, word: string): Promise<unknown> {
+  const { rows } = await query<{ data: unknown }>(
+    'SELECT data FROM dict_cache WHERE account_id = $1 AND sentence_id = $2 AND word = $3',
+    [accountId, sentenceId, word],
+  );
   return rows[0]?.data || null;
 }
 
+/** 句子不存在或不属于 accountId 时抛出外键错误（23503） */
 export async function putDict(accountId: string, sentenceId: string, word: string, data: unknown): Promise<void> {
   await query(
     `INSERT INTO dict_cache (account_id, sentence_id, word, data) VALUES ($1, $2, $3, $4::jsonb)

@@ -361,7 +361,7 @@ export function createAi({
     if (!/^[a-z][a-z'-]{0,39}$/.test(word)) throw new HttpError(400, '只能查英文单词');
     const sentence = await repo.getSentence(account.id, String(sentenceId || ''));
     if (!sentence) throw new HttpError(404, '句子不存在');
-    const cached = await repo.getDict(sentence.id, word);
+    const cached = await repo.getDict(account.id, sentence.id, word);
     if (cached) return { word, data: cached as DictEntry, cached: true };
     await checkLimit(account, 'lookups', cfg.limits.lookup, '今天的查词次数用完了（{n} 次）');
     const L = metered(await llmFor(account, { kind: 'lookup' }), account.id, 'lookup', log);
