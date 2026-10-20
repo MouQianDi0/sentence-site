@@ -332,13 +332,29 @@ export async function getUsage(accountId: string, day: string): Promise<UsageRow
   return rows[0] || { grades: 0, lookups: 0, gens: 0 };
 }
 
-export async function bumpUsage(accountId: string, day: string, field: UsageField): Promise<void> {
+/**
+ * 占用一次今天的额度：没到上限就加 1 并返回 true，到了上限返回 false。
+ * 判断和加 1 在同一条语句里，几个请求同时到也不会超过上限。limit 为 0 时一次都不能用。
+ */
+export async function reserveUsage(accountId: string, day: string, field: UsageField, limit: number): Promise<boolean> {
   if (!USAGE_FIELDS.includes(field)) throw new Error(`unknown usage field ${field}`);
-  await query(
+  if (limit < 1) return false;
+  const { rows } = await query(
     `INSERT INTO ai_usage (account_id, day, ${field}) VALUES ($1, $2::date, 1)
-     ON CONFLICT (account_id, day) DO UPDATE SET ${field} = ai_usage.${field} + 1`,
-    [accountId, day],
+     ON CONFLICT (account_id, day) DO UPDATE SET ${field} = ai_usage.${field} + 1 WHERE ai_usage.${field} < $3
+     RETURNING ${field}`,
+    [accountId, day, limit],
   );
+  return rows.length > 0;
+}
+
+/** 退回 reserveUsage 占的一次（模型调用失败不算次数）；day 用占的时候那一天 */
+export async function releaseUsage(accountId: string, day: string, field: UsageField): Promise<void> {
+  if (!USAGE_FIELDS.includes(field)) throw new Error(`unknown usage field ${field}`);
+  await query(`UPDATE ai_usage SET ${field} = ${field} - 1 WHERE account_id = $1 AND day = $2::date AND ${field} > 0`, [
+    accountId,
+    day,
+  ]);
 }
 
 // ---- token 用量（按账户、日期、用途、模型累加）-------------------------------------

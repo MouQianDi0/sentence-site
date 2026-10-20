@@ -2,6 +2,27 @@
 
 所有代码变更都记在这里，新的在最上面。时间是北京时间。
 
+## 2026-10-21 01:13:06
+
+**变更类型**：重构（数据库）
+
+**变更概述**：数据库改进第 4 步：给账户、句子、批改加 CHECK 约束，代码里一直遵守的规则交给数据库守着；每日批改、查词、加练出题次数改成调用模型前先占一次额度（判断和加 1 在同一条语句里），几个请求同时到也不会冲过上限，模型调用失败时退回，仍然“失败不算次数”。只加约束、不改数据，不依赖服务器是否已部署第 3 步；现有数据万一不满足，迁移整份失败、自动退回上一版，数据不变。
+
+**修改的文件**
+
+- 新增 `api/src/migrations/0004_checks.sql`
+- 修改 `api/src/repo.ts`、`api/src/ai.ts`
+- 修改 `api/test/migrate.test.ts`、`api/test/api.test.ts`
+- 修改 `CHANGELOG.md`
+
+**具体内容**
+
+- `accounts`：只有 id 为 `owner` 的是 owner；邀请账户必须有邀请码；`valid_days` 只能是 30 / 90 / 180 / 360（NULL 是永久）；`device_limit` 1–10；有 `expires_at` 的必须有 `activated_at` 和 `valid_days`。
+- `sentences`：`segs`、`opts`、`words`、`phrases` 都是 JSON 数组；`source` 只能是 seed / daily / manual / extra（0001 已有同样内容的 `sentences_source_check`，换成 `sentences_source`，不留两条）。
+- `attempts`：准确 0–40、通顺 0–30、完整 0–30、总分 0–100，没有分数（NULL）的旧批改照常。
+- `repo.bumpUsage` 换成 `reserveUsage`（`INSERT … ON CONFLICT DO UPDATE … WHERE 没到上限 RETURNING`，没返回行就是用完了）和 `releaseUsage`（减 1，不会减到负数）；`ai.ts` 的 `checkLimit` 换成 `withQuota`：先占，调用出错用同一天退回。上限、429 和提示文字不变，今日任务仍不算出题次数。请求进行中这一次已经算在当天用量里。
+- 测试：0004 可重复执行、从 0001 整个重来也行；违反每条约束的写入报 23514；现有数据不满足时迁移整份不生效；上限 2 时同时批改 5 次只有 2 次成功；模型调用失败、出的题没通过校验时次数退回。
+
 ## 2026-10-21 00:19:14
 
 **变更类型**：重构（数据库）

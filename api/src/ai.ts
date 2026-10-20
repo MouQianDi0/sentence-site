@@ -207,9 +207,29 @@ export function createAi({
     return { sentence: await repo.getSentence(account.id, sentence.id) };
   }
 
-  async function checkLimit(account: Account, field: UsageField, limit: number, message: string): Promise<void> {
-    const usage = await repo.getUsage(account.id, shanghaiDate());
-    if (usage[field] >= limit) throw new HttpError(429, message.replace('{n}', String(limit)));
+  /**
+   * 先占一次今天的额度再调用模型：用完了返回 429；fn 抛错时用同一个 day 退回这一次，失败不算次数。
+   * 先占后调，几个请求同时到也不会冲过上限。
+   */
+  async function withQuota<T>(
+    account: Account,
+    field: UsageField,
+    limit: number,
+    message: string,
+    fn: (day: string) => Promise<T>,
+  ): Promise<T> {
+    const day = shanghaiDate();
+    if (!(await repo.reserveUsage(account.id, day, field, limit))) {
+      throw new HttpError(429, message.replace('{n}', String(limit)));
+    }
+    try {
+      return await fn(day);
+    } catch (e) {
+      await repo
+        .releaseUsage(account.id, day, field)
+        .catch((err: Error) => log.error?.(`[ai] 退回${field}次数没成功：${err.message}`));
+      throw e;
+    }
   }
 
   /**
@@ -229,7 +249,12 @@ export function createAi({
     if (text.length > 500) throw new HttpError(400, '译文太长了（最多 500 字）');
     const sentence = await repo.getSentence(account.id, String(sentenceId || ''));
     if (!sentence) throw new HttpError(404, '句子不存在');
-    await checkLimit(account, 'grades', cfg.limits.grade, '今天的批改次数用完了（{n} 次），明天再来');
+    return withQuota(account, 'grades', cfg.limits.grade, '今天的批改次数用完了（{n} 次），明天再来', () =>
+      gradeNow(account, sentence, text, boost),
+    );
+  }
+
+  async function gradeNow(account: Account, sentence: Sentence, text: string, boost: boolean): Promise<Attempt> {
     // 评分和汇总的每次请求都记到这个账户的 token 用量里
     const L = metered(await llmFor(account, { kind: 'grade' }), account.id, 'grade', log);
 
@@ -287,7 +312,6 @@ export function createAi({
       inputTokens: sumTokens(calls.map((c) => c.usage.input)),
       outputTokens: sumTokens(calls.map((c) => c.usage.output)),
     });
-    await repo.bumpUsage(account.id, shanghaiDate(), 'grades');
     return attempt;
   }
 
@@ -363,7 +387,12 @@ export function createAi({
     if (!sentence) throw new HttpError(404, '句子不存在');
     const cached = await repo.getDict(account.id, sentence.id, word);
     if (cached) return { word, data: cached as DictEntry, cached: true };
-    await checkLimit(account, 'lookups', cfg.limits.lookup, '今天的查词次数用完了（{n} 次）');
+    return withQuota(account, 'lookups', cfg.limits.lookup, '今天的查词次数用完了（{n} 次）', () =>
+      lookupNow(account, sentence, word),
+    );
+  }
+
+  async function lookupNow(account: Account, sentence: Sentence, word: string): Promise<LookupResult> {
     const L = metered(await llmFor(account, { kind: 'lookup' }), account.id, 'lookup', log);
 
     let result: Awaited<ReturnType<Llm['chatJson']>>;
@@ -388,7 +417,6 @@ export function createAi({
     };
     if (!data.zh) throw new HttpError(502, '没查到这个词的意思');
     await repo.putDict(account.id, sentence.id, word, data);
-    await repo.bumpUsage(account.id, shanghaiDate(), 'lookups');
     return { word, data, cached: false };
   }
 
@@ -434,143 +462,153 @@ export function createAi({
       dailyBusy.add(account.id);
     }
     try {
-      if (source !== 'daily')
-        await checkLimit(account, 'gens', cfg.limits.generate, '今天加练出题的次数用完了（{n} 次）');
-      // 出题和出题后的谓语复核分开记 token 用量
-      const L = metered(await llmFor(account, { kind: 'generate', background }), account.id, 'generate', log);
-      const reviewer = metered(await llmFor(account, { kind: 'review', background }), account.id, 'review', log);
-      const day = shanghaiDate();
-      const clock = shanghaiClock();
-      const now = Date.now();
-      const offset = source === 'daily' ? await repo.countDailyFor(account.id, day) : 0;
-      const need: Need = {};
-      for (const l of planLevels(n, levels)) need[l] = (need[l] || 0) + 1;
-      const accepted: (SentenceBody & { level: Level })[] = [];
-      const reasons: string[] = [];
-      const recentDb = await repo.recentSentences(account.id, 40);
-      type Asked = { list: SentenceBody[]; error?: undefined } | { error: unknown; list?: undefined };
-      const ask = async (plan: Level[], topics: string[] | null): Promise<Asked> => {
-        try {
-          const r = await L.chatJson({
-            prompt: generatePrompt(plan, [...accepted, ...recentDb].slice(0, 50), topics),
-            model: L.models().main,
-            maxTokens: 8000,
-            temperature: 0.8,
-            timeoutMs: Math.max(cfg.llm.timeoutMs, 180_000),
-          });
-          const raw = Array.isArray(r.data) ? r.data : obj(r.data)?.sentences;
-          return { list: await vet(Array.isArray(raw) ? (raw as unknown[]) : []) };
-        } catch (e) {
-          return { error: e };
-        }
-      };
-      // 先按规则校验，再让 AI 复核谓语标注：标错的按复核结果改正，改完再校验一遍；复核本身出错时保留规则校验通过的句子
-      const vet = async (raw: unknown[]): Promise<SentenceBody[]> => {
-        const list: SentenceBody[] = [];
-        for (const item of raw) {
-          const checked = checkSentence(item, { strict: true });
-          if (checked.ok) list.push(checked.value);
-          else reasons.push(checked.reason);
-        }
-        if (!list.length) return list;
-        let reviews: Review[];
-        try {
-          reviews = await reviewMarks(reviewer, list);
-        } catch (e) {
-          reasons.push(`谓语复核没做成：${(e as Error).message}`);
-          return list;
-        }
-        const out: SentenceBody[] = [];
-        list.forEach((s, i) => {
-          const rv = reviews[i];
-          if (rv?.status === 'mismatch') {
-            reasons.push('复核给出的谓语在原句里找不到');
-            return;
-          }
-          if (rv?.status !== 'ok' || !rv.changed) {
-            out.push(s);
-            return;
-          }
-          const again = checkSentence({ ...s, segs: rv.segs }, { strict: true });
-          if (!again.ok) {
-            reasons.push(`复核改正后仍不合格：${again.reason}`);
-            return;
-          }
-          log.warn?.(`[ai] 复核改正了谓语标注：${rv.note || markKey(s.segs)}`);
-          out.push(again.value);
-        });
-        return out;
-      };
-      const take = (list: SentenceBody[]) => {
-        for (const item of list) {
-          if (accepted.length >= n) break;
-          const level = normLevel(item.level);
-          if (!level || !need[level]) {
-            reasons.push(`难度 ${item.level || '未标注'} 不是这次要的`);
-            continue;
-          }
-          need[level] = (need[level] ?? 0) - 1;
-          accepted.push({ ...item, level });
-        }
-      };
-
-      // 第一轮：按 5 句一批同时请求，每批分到不同的话题，句数多时也不会等太久
-      const firstPlan: Level[] = [];
-      for (const l of LEVELS) for (let i = 0; i < (need[l] || 0); i++) firstPlan.push(l);
-      const plans: Level[][] = [];
-      const shuffled = shuffleCopy(firstPlan);
-      for (let i = 0; i < shuffled.length; i += CHUNK) plans.push(shuffled.slice(i, i + CHUNK));
-      const topicStart = Math.floor(Math.random() * TOPICS.length);
-      const topicsFor = (k: number): string[] =>
-        Array.from({ length: 6 }, (_, j) => TOPICS[(topicStart + k * 6 + j) % TOPICS.length] ?? '');
-      const first = await Promise.all(plans.map((plan, k) => ask(plan, plans.length > 1 ? topicsFor(k) : null)));
-      let lastError: unknown = null;
-      for (const r of first) {
-        if (r.list) take(r.list);
-        else {
-          lastError = r.error;
-          reasons.push((r.error as Error).message);
-        }
-      }
-      // 认证失败、额度用完这类错误，补出也没用
-      const fatal = (e: unknown) =>
-        e instanceof LlmError && ['auth', 'rate_limited', 'not_configured'].includes(e.code);
-      // 补出：没通过校验或难度不对的，最多再请求 2 次
-      for (let round = 0; round < 2 && accepted.length < n && !(lastError && fatal(lastError)); round++) {
-        const r = await ask(shuffleCopy(takeChunk(need)), null);
-        if (r.list) take(r.list);
-        else {
-          lastError = r.error;
-          reasons.push((r.error as Error).message);
-          if (fatal(r.error)) break;
-        }
-      }
-      if (!accepted.length && lastError) throw toHttpError(lastError);
-      if (reasons.length) log.warn?.(`[ai] 生成时丢弃：${reasons.join('；')}`);
-
-      // 打乱顺序后再写入，四级六级混着出现。编号被占用时（删过句子、同一秒内加练两次）顺延
-      const ids: string[] = [];
-      const d = day.replace(/-/g, '');
-      let next = source === 'daily' ? offset + 1 : 1;
-      for (const item of shuffleCopy(accepted)) {
-        const created = new Date(now + ids.length + 1).toISOString();
-        for (let tries = 0; tries < 30; tries++, next++) {
-          // 句子 id 全局唯一：邀请账户的加上账户 id 做前缀，owner 保持原来的格式
-          const base = source === 'daily' ? `s-${d}-d${next}` : `s-${d}-${clock}-${next}`;
-          const id = account.role === 'owner' ? base : `${account.id}-${base}`;
-          if (await repo.insertSentence({ ...item, id, created, batch: day, source, accountId: account.id })) {
-            ids.push(id);
-            next++;
-            break;
-          }
-        }
-      }
-      if (!ids.length) throw new HttpError(502, 'AI 这次出的题都没通过校验，再试一次');
-      if (source !== 'daily') await repo.bumpUsage(account.id, day, 'gens');
-      return ids;
+      // 今日任务不算进出题次数
+      if (source === 'daily') return await generateNow(account, shanghaiDate(), source, n, levels, background);
+      return await withQuota(account, 'gens', cfg.limits.generate, '今天加练出题的次数用完了（{n} 次）', (day) =>
+        generateNow(account, day, source, n, levels, background),
+      );
     } finally {
       if (source === 'daily') dailyBusy.delete(account.id);
     }
+  }
+
+  async function generateNow(
+    account: Account,
+    day: string,
+    source: SentenceSource,
+    n: number,
+    levels: Level[],
+    background: boolean,
+  ): Promise<string[]> {
+    // 出题和出题后的谓语复核分开记 token 用量
+    const L = metered(await llmFor(account, { kind: 'generate', background }), account.id, 'generate', log);
+    const reviewer = metered(await llmFor(account, { kind: 'review', background }), account.id, 'review', log);
+    const clock = shanghaiClock();
+    const now = Date.now();
+    const offset = source === 'daily' ? await repo.countDailyFor(account.id, day) : 0;
+    const need: Need = {};
+    for (const l of planLevels(n, levels)) need[l] = (need[l] || 0) + 1;
+    const accepted: (SentenceBody & { level: Level })[] = [];
+    const reasons: string[] = [];
+    const recentDb = await repo.recentSentences(account.id, 40);
+    type Asked = { list: SentenceBody[]; error?: undefined } | { error: unknown; list?: undefined };
+    const ask = async (plan: Level[], topics: string[] | null): Promise<Asked> => {
+      try {
+        const r = await L.chatJson({
+          prompt: generatePrompt(plan, [...accepted, ...recentDb].slice(0, 50), topics),
+          model: L.models().main,
+          maxTokens: 8000,
+          temperature: 0.8,
+          timeoutMs: Math.max(cfg.llm.timeoutMs, 180_000),
+        });
+        const raw = Array.isArray(r.data) ? r.data : obj(r.data)?.sentences;
+        return { list: await vet(Array.isArray(raw) ? (raw as unknown[]) : []) };
+      } catch (e) {
+        return { error: e };
+      }
+    };
+    // 先按规则校验，再让 AI 复核谓语标注：标错的按复核结果改正，改完再校验一遍；复核本身出错时保留规则校验通过的句子
+    const vet = async (raw: unknown[]): Promise<SentenceBody[]> => {
+      const list: SentenceBody[] = [];
+      for (const item of raw) {
+        const checked = checkSentence(item, { strict: true });
+        if (checked.ok) list.push(checked.value);
+        else reasons.push(checked.reason);
+      }
+      if (!list.length) return list;
+      let reviews: Review[];
+      try {
+        reviews = await reviewMarks(reviewer, list);
+      } catch (e) {
+        reasons.push(`谓语复核没做成：${(e as Error).message}`);
+        return list;
+      }
+      const out: SentenceBody[] = [];
+      list.forEach((s, i) => {
+        const rv = reviews[i];
+        if (rv?.status === 'mismatch') {
+          reasons.push('复核给出的谓语在原句里找不到');
+          return;
+        }
+        if (rv?.status !== 'ok' || !rv.changed) {
+          out.push(s);
+          return;
+        }
+        const again = checkSentence({ ...s, segs: rv.segs }, { strict: true });
+        if (!again.ok) {
+          reasons.push(`复核改正后仍不合格：${again.reason}`);
+          return;
+        }
+        log.warn?.(`[ai] 复核改正了谓语标注：${rv.note || markKey(s.segs)}`);
+        out.push(again.value);
+      });
+      return out;
+    };
+    const take = (list: SentenceBody[]) => {
+      for (const item of list) {
+        if (accepted.length >= n) break;
+        const level = normLevel(item.level);
+        if (!level || !need[level]) {
+          reasons.push(`难度 ${item.level || '未标注'} 不是这次要的`);
+          continue;
+        }
+        need[level] = (need[level] ?? 0) - 1;
+        accepted.push({ ...item, level });
+      }
+    };
+
+    // 第一轮：按 5 句一批同时请求，每批分到不同的话题，句数多时也不会等太久
+    const firstPlan: Level[] = [];
+    for (const l of LEVELS) for (let i = 0; i < (need[l] || 0); i++) firstPlan.push(l);
+    const plans: Level[][] = [];
+    const shuffled = shuffleCopy(firstPlan);
+    for (let i = 0; i < shuffled.length; i += CHUNK) plans.push(shuffled.slice(i, i + CHUNK));
+    const topicStart = Math.floor(Math.random() * TOPICS.length);
+    const topicsFor = (k: number): string[] =>
+      Array.from({ length: 6 }, (_, j) => TOPICS[(topicStart + k * 6 + j) % TOPICS.length] ?? '');
+    const first = await Promise.all(plans.map((plan, k) => ask(plan, plans.length > 1 ? topicsFor(k) : null)));
+    let lastError: unknown = null;
+    for (const r of first) {
+      if (r.list) take(r.list);
+      else {
+        lastError = r.error;
+        reasons.push((r.error as Error).message);
+      }
+    }
+    // 认证失败、额度用完这类错误，补出也没用
+    const fatal = (e: unknown) => e instanceof LlmError && ['auth', 'rate_limited', 'not_configured'].includes(e.code);
+    // 补出：没通过校验或难度不对的，最多再请求 2 次
+    for (let round = 0; round < 2 && accepted.length < n && !(lastError && fatal(lastError)); round++) {
+      const r = await ask(shuffleCopy(takeChunk(need)), null);
+      if (r.list) take(r.list);
+      else {
+        lastError = r.error;
+        reasons.push((r.error as Error).message);
+        if (fatal(r.error)) break;
+      }
+    }
+    if (!accepted.length && lastError) throw toHttpError(lastError);
+    if (reasons.length) log.warn?.(`[ai] 生成时丢弃：${reasons.join('；')}`);
+
+    // 打乱顺序后再写入，四级六级混着出现。编号被占用时（删过句子、同一秒内加练两次）顺延
+    const ids: string[] = [];
+    const d = day.replace(/-/g, '');
+    let next = source === 'daily' ? offset + 1 : 1;
+    for (const item of shuffleCopy(accepted)) {
+      const created = new Date(now + ids.length + 1).toISOString();
+      for (let tries = 0; tries < 30; tries++, next++) {
+        // 句子 id 全局唯一：邀请账户的加上账户 id 做前缀，owner 保持原来的格式
+        const base = source === 'daily' ? `s-${d}-d${next}` : `s-${d}-${clock}-${next}`;
+        const id = account.role === 'owner' ? base : `${account.id}-${base}`;
+        if (await repo.insertSentence({ ...item, id, created, batch: day, source, accountId: account.id })) {
+          ids.push(id);
+          next++;
+          break;
+        }
+      }
+    }
+    if (!ids.length) throw new HttpError(502, 'AI 这次出的题都没通过校验，再试一次');
+    return ids;
   }
 
   return { grade, lookup, generate, reviewOne, setMarks };

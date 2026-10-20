@@ -5,7 +5,9 @@ import fs from 'node:fs/promises';
 import { setQueryImpl } from '../src/db.ts';
 import { loadConfig } from '../src/config.ts';
 import { createApp } from '../src/app.ts';
-import { createLlm } from '../src/llm.ts';
+import { createLlm, LlmError } from '../src/llm.ts';
+import { HttpError } from '../src/http.ts';
+import { shanghaiDate } from '../src/time.ts';
 import { createAi } from '../src/ai.ts';
 import * as repo from '../src/repo.ts';
 import { migrate } from '../src/migrate.ts';
@@ -809,4 +811,53 @@ test('做题时修正：按单词位置改谓语，或让 AI 复查这一句', a
   } finally {
     delete llmServer.handlers.review;
   }
+});
+
+test('每日额度：一条语句里判断和加 1，同时到的请求不会冲过上限，退回不会减到负数', async () => {
+  await db.raw('DELETE FROM ai_usage');
+  const day = shanghaiDate();
+  const got = await Promise.all(Array.from({ length: 5 }, () => repo.reserveUsage('owner', day, 'lookups', 2)));
+  assert.equal(got.filter(Boolean).length, 2);
+  assert.equal((await repo.getUsage('owner', day)).lookups, 2);
+  assert.equal(await repo.reserveUsage('owner', day, 'grades', 0), false, '上限 0 一次都不能用');
+  for (let i = 0; i < 3; i++) await repo.releaseUsage('owner', day, 'lookups');
+  assert.equal((await repo.getUsage('owner', day)).lookups, 0);
+  await assert.rejects(() => repo.reserveUsage('owner', day, 'nope' as 'grades', 2), /unknown usage field/);
+});
+
+test('每日额度：上限 2 时同时批改 5 次，只有 2 次成功，其余 429', async () => {
+  await db.raw('DELETE FROM ai_usage');
+  gradeReplyGetter = () => ({ acc: 30, flu: 20, comp: 20, issues: [], good: [], level: 'ok', better: '' });
+  const ai2 = createAi({ cfg: { ...cfg, limits: { ...cfg.limits, grade: 2 } }, llm: createLlm(cfg), log: quiet });
+  const owner = await ownerAccount();
+  const settled = await Promise.allSettled(
+    Array.from({ length: 5 }, (_, i) => ai2.grade(owner, 's-20261013-03', `同时批改 ${i}`)),
+  );
+  gradeReplyGetter = () => gradeReply;
+  assert.equal(settled.filter((s) => s.status === 'fulfilled').length, 2);
+  const rejected = settled.flatMap((s) => (s.status === 'rejected' ? [s.reason as HttpError] : []));
+  assert.equal(rejected.length, 3);
+  assert.ok(rejected.every((e) => e.status === 429 && /2 次/.test(e.message)));
+  assert.equal((await repo.getUsage('owner', shanghaiDate())).grades, 2);
+});
+
+test('每日额度：模型调用失败时退回占的那一次', async () => {
+  await db.raw('DELETE FROM ai_usage');
+  const owner = await ownerAccount();
+  const broken = createAi({
+    cfg,
+    llm: createLlm(cfg),
+    llmFor: async () => {
+      throw new LlmError('upstream', '模型接口出错了');
+    },
+    log: quiet,
+  });
+  await assert.rejects(() => broken.lookup(owner, 's-20261013-01', 'flexibility'), LlmError);
+  await assert.rejects(() => broken.grade(owner, 's-20261013-03', '一段译文'), LlmError);
+  await assert.rejects(() => broken.generate(owner, { source: 'extra', n: 1, levels: ['CET-4'] }), LlmError);
+  // 模型回复了但一句都没通过校验，也不算次数
+  generateReplyGetter = () => ({ sentences: [] });
+  await assert.rejects(() => ai.generate(owner, { source: 'extra', n: 1, levels: ['CET-4'] }), /没通过校验/);
+  generateReplyGetter = () => null;
+  assert.deepEqual(await repo.getUsage('owner', shanghaiDate()), { grades: 0, lookups: 0, gens: 0 });
 });
