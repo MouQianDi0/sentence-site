@@ -2,6 +2,30 @@
 
 所有代码变更都记在这里，新的在最上面。时间是北京时间。
 
+## 2026-10-21 02:23:07
+
+**变更类型**：新功能
+
+**变更概述**：数据库改进第 5 步（二）：标注题库和管理页。后台用你自己配的国内模型把题库句子逐句拆解成和 AI 出题一样格式的题，必须过同样的严格校验、片段拼回去等于原句才能抽；标注永远不走 ChatGPT（哪怕是你自己），有测试守着。设置下面新增“真题题库”页面（`/settings/bank`，只有你自己看得到）。
+
+**修改的文件**
+
+- 新增 `api/src/annotate.ts`、`api/scripts/annotate-bank.ts`、`web/src/settings/exam-bank.ts`
+- 修改 `shared/src/types.ts`
+- 修改 `api/src/app.ts`、`api/src/ai.ts`、`api/src/prompts.ts`、`api/src/repo.ts`、`api/src/bank.ts`、`api/src/llm-route.ts`、`api/src/settings.ts`、`api/src/tokens.ts`、`api/src/validate.ts`
+- 修改 `web/index.html`、`web/src/router.ts`、`web/src/lib/api.ts`、`web/src/settings/index.ts`、`web/src/settings/usage.ts`
+- 修改 `api/test/bank.test.ts`、`api/test/chatgpt.test.ts`、`api/test/helpers.ts`
+- 修改 `README.md`、`CHANGELOG.md`
+
+**具体内容**
+
+- 新的 token 用途 `annotate`（“标注题库”），记在 owner 名下。`llmFor` 对 annotate 不套 ChatGPT 那一层，`routeLlm` 遇到 annotate 也不用套餐，两处都挡着。
+- 标注提示词 `annotatePrompt` 用出题规范的全部几段，要求不改原句一个字；主句是并列谓语的让模型回复 skip。拆解过 `checkSentence(…, { strict: true })`，再比较片段拼回去和原句（`text_fix ?? text`，统一引号、破折号两边空格、空白），再像出题一样复核一遍谓语。校验没过再问一次，还不过 → rejected 并记原因；模型出错留在 raw；密钥无效、没配置、限流时整批停下。词数、结尾标点不对的不问模型直接不要。
+- 存结果时只在这句还是 raw、原文没被改过时才存，标注期间在管理页改了原文的这次作废。
+- 接口（只有 owner）：`GET /api/admin/bank`（各状态句数、标注进度、国内模型配好没有）、`GET /api/admin/bank/items?status=`、`POST …/items/:id/confirm`、`PUT …/items/:id`（改原文）、`POST …/items/:id/reject`、`POST …/items/:id/requeue`、`POST /api/admin/bank/annotate`（后台跑一批，同时只跑一批）、`PUT /api/admin/bank/:bankId`（启用 / 停用）。命令行 `scripts/annotate-bank.ts --limit N --concurrency N`。
+- 句子结尾是弯引号（`.”`）也算句号结尾（`validate.ts`），真题里引语结尾的句子不会因此被拒。
+- 测试：annotate 哪怕所有用途和后台都开着也不走 ChatGPT；拼回去不等于原句、过不了严格校验、太长、模型说拆不了的不要，模型出错留在 raw；改过原文的按改过的比较；标注期间原文被改，结果作废；邀请账户用不了 `/api/admin/bank/*`；管理页的各个操作；后台标注用你自己的密钥、token 记在你名下。
+
 ## 2026-10-21 02:09:11
 
 **变更类型**：新功能（数据库）

@@ -1,7 +1,8 @@
-// “设置”页：每日任务、邀请码入口（只有你自己）、AI 批改（准确度提升）、Token 用量入口、ChatGPT 套餐（只有你自己）、模型设置、账户。
+// “设置”页：每日任务、邀请码入口和真题题库入口（只有你自己）、AI 批改（准确度提升）、Token 用量入口、ChatGPT 套餐（只有你自己）、模型设置、账户。
 // 第一次进入时几块的数据一起读好再一起显示、只播一次进场动画；之后再进入先显示上次读到的，
 // 后台读到新数据再悄悄更新（不再播动画），所以不会一块一块地闪出来。
-// 邀请码管理、Token 用量是从设置主页点进去的单独页面（/settings/invites、/settings/usage），手机的返回手势能回到设置主页。
+// 邀请码管理、真题题库、Token 用量是从设置主页点进去的单独页面（/settings/invites、/settings/bank、/settings/usage），
+// 手机的返回手势能回到设置主页。
 import { api } from '../lib/api.ts';
 import * as A from '../lib/anim.ts';
 import { $, closest } from '../lib/dom.ts';
@@ -15,6 +16,7 @@ import { createSettingsView } from './llm-settings.ts';
 import { createTaskSettings } from './task-settings.ts';
 import { createInvites, inviteEntryHTML, accountHTML } from './invites.ts';
 import { createUsage, usageEntryHTML } from './usage.ts';
+import { createExamBank, bankEntryHTML } from './exam-bank.ts';
 import { createChatgptSettings } from './chatgpt-settings.ts';
 
 const isOwner = () => state.me?.role === 'owner';
@@ -22,6 +24,7 @@ const isOwner = () => state.me?.role === 'owner';
 let taskSettings: ReturnType<typeof createTaskSettings>;
 let invitesView: ReturnType<typeof createInvites>;
 let usageView: ReturnType<typeof createUsage>;
+let bankView: ReturnType<typeof createExamBank>;
 let llmView: ReturnType<typeof createSettingsView>;
 let chatgptView: ReturnType<typeof createChatgptSettings>;
 
@@ -32,15 +35,17 @@ let pushed = false; // 从设置主页点进单独页面时加了一条历史记
 /** 现在在设置下面的哪个单独页面（在设置主页时是 null） */
 export const subOpen = (): SettingsSub | null => shown;
 
-/** 这个账户能不能看这个单独页面：邀请码管理只有你自己能看，Token 用量谁都能看 */
-const allowed = (sub: SettingsSub | null): SettingsSub | null => (sub === 'invites' && !isOwner() ? null : sub);
+/** 这个账户能不能看这个单独页面：邀请码管理、真题题库只有你自己能看，Token 用量谁都能看 */
+const allowed = (sub: SettingsSub | null): SettingsSub | null =>
+  (sub === 'invites' || sub === 'bank') && !isOwner() ? null : sub;
 
 /** 单独页面的组件 */
-const viewOf = (sub: SettingsSub) => (sub === 'invites' ? invitesView : usageView);
+const viewOf = (sub: SettingsSub) => (sub === 'invites' ? invitesView : sub === 'bank' ? bankView : usageView);
 
 const MAIN_IDS = [
   'taskSettings',
   'inviteEntry',
+  'bankEntry',
   'gradeSettings',
   'usageEntry',
   'chatgptSettings',
@@ -50,6 +55,10 @@ const MAIN_IDS = [
 
 function renderInviteEntry(): void {
   $('inviteEntry').innerHTML = isOwner() ? inviteEntryHTML(invitesView.summary()) : '';
+}
+
+function renderBankEntry(): void {
+  $('bankEntry').innerHTML = isOwner() ? bankEntryHTML(bankView.summary()) : '';
 }
 
 function renderUsageEntry(): void {
@@ -75,6 +84,7 @@ function setLoading(on: boolean): void {
 function renderSettingsMain(enter: boolean): void {
   taskSettings.render();
   renderInviteEntry();
+  renderBankEntry();
   renderUsageEntry();
   renderChatgpt();
   llmView.render();
@@ -89,13 +99,15 @@ export async function openSettings(): Promise<void> {
   llmView.reset();
   invitesView.reset();
   usageView.reset();
+  bankView.reset();
   chatgptView.reset();
-  // 邀请码管理、ChatGPT 套餐只有你自己（访问密码登录）看得到；模型设置、Token 用量每个账户都有，各看各的
+  // 邀请码管理、真题题库、ChatGPT 套餐只有你自己（访问密码登录）看得到；模型设置、Token 用量每个账户都有，各看各的
   const parts = {
     task: taskSettings,
     llm: llmView,
     usage: usageView,
     invites: isOwner() ? invitesView : null,
+    bank: isOwner() ? bankView : null,
     chatgpt: isOwner() ? chatgptView : null,
   };
   const list = Object.values(parts).filter((p) => p !== null);
@@ -113,13 +125,16 @@ export async function openSettings(): Promise<void> {
     setLoading(true);
     if (want) viewOf(want).render();
   }
-  const [task, llm, usage, invites, gpt] = await Promise.all([
+  const [task, llm, usage, invites, gpt, bank] = await Promise.all([
     parts.task.load(),
     parts.llm.load(),
     parts.usage.load(),
     parts.invites ? parts.invites.load() : Promise.resolve(false),
     parts.chatgpt ? parts.chatgpt.load() : Promise.resolve(false),
+    parts.bank ? parts.bank.load() : Promise.resolve(false),
   ]);
+  // 刷新时停在题库页：句子列表要单独读
+  if (shown === 'bank' && mine === seq) void bankView.open();
   if (mine !== seq || state.view !== 'settings') return;
   if (!cached) {
     renderSettingsMain(!shown);
@@ -138,6 +153,10 @@ export async function openSettings(): Promise<void> {
     renderInviteEntry();
     if (shown === 'invites') invitesView.render();
   }
+  if (bank) {
+    renderBankEntry();
+    if (shown === 'bank') bankView.render();
+  }
 }
 
 /** 设置页里切换“主页 / 邀请码管理页 / Token 用量页” */
@@ -150,6 +169,7 @@ function showSettingsPage(sub: SettingsSub | null): void {
   };
   toggle('settingsMain', !sub);
   toggle('settingsInvites', sub === 'invites');
+  toggle('settingsBank', sub === 'bank');
   toggle('settingsUsage', sub === 'usage');
 }
 
@@ -163,7 +183,11 @@ function openSub(sub: SettingsSub): void {
   const view = viewOf(sub);
   view.render(true);
   window.scrollTo({ top: 0 });
-  // 进来时顺便刷新一下（设置主页读到的可能是几分钟前的）
+  // 进来时顺便刷新一下（设置主页读到的可能是几分钟前的）；题库页还要读句子列表
+  if (sub === 'bank') {
+    void bankView.open().then(() => renderBankEntry());
+    return;
+  }
   void view.load().then((changed) => {
     if (changed && shown === sub) view.render();
     if (changed && sub === 'invites') renderInviteEntry();
@@ -185,6 +209,7 @@ function backToSettingsMain(): void {
   pushed = false;
   invitesView.reset();
   usageView.reset();
+  bankView.reset();
   showSettingsPage(null);
   A.enter(settingsCards());
   window.scrollTo({ top: 0 });
@@ -196,6 +221,7 @@ export function leaveSub(): void {
   pushed = false;
   invitesView.reset();
   usageView.reset();
+  bankView.reset();
   showSettingsPage(null);
 }
 
@@ -206,6 +232,7 @@ export function syncSub(asked: SettingsSub | null): void {
   if (want && want !== shown) {
     showSettingsPage(want);
     viewOf(want).render(true);
+    if (want === 'bank') void bankView.open();
     window.scrollTo({ top: 0 });
   } else if (!want && shown) backToSettingsMain();
 }
@@ -247,6 +274,12 @@ export function initSettings(): void {
     onBack: () => closeSub(),
     onChange: () => renderInviteEntry(),
   });
+  bankView = createExamBank({
+    root: $('settingsBank'),
+    toast,
+    onBack: () => closeSub(),
+    onChange: () => renderBankEntry(),
+  });
   usageView = createUsage({
     root: $('settingsUsage'),
     toast,
@@ -268,6 +301,9 @@ export function initSettings(): void {
 
   $('inviteEntry').addEventListener('click', (e) => {
     if (closest(e, '[data-act="openInvites"]')) openSub('invites');
+  });
+  $('bankEntry').addEventListener('click', (e) => {
+    if (closest(e, '[data-act="openBank"]')) openSub('bank');
   });
   $('usageEntry').addEventListener('click', (e) => {
     if (closest(e, '[data-act="openUsage"]')) openSub('usage');

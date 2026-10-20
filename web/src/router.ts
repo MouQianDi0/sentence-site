@@ -1,5 +1,5 @@
-// 页面地址：练习、记录、设置各有自己的地址；设置下面还有两个单独的页面：邀请码管理、Token 用量。
-//   /practice   /records   /settings   /settings/invites   /settings/usage
+// 页面地址：练习、记录、设置各有自己的地址；设置下面还有几个单独的页面：邀请码管理、真题题库、Token 用量。
+//   /practice   /records   /settings   /settings/invites   /settings/bank   /settings/usage
 // 换页只改地址栏、不重新加载，切换动画和以前一样；刷新、收藏、前进后退都会停在对应的页面。
 // 服务器（nginx/default.conf 的 try_files）对这些地址都返回同一个 index.html。
 import type { ViewName } from './state.ts';
@@ -10,16 +10,17 @@ export const PATHS: Record<ViewName, string> = {
   settings: '/settings',
 };
 
-/** 设置下面的单独页面：邀请码管理（只有你自己）、Token 用量（每个账户都有） */
-export type SettingsSub = 'invites' | 'usage';
+/** 设置下面的单独页面：邀请码管理、真题题库（只有你自己）、Token 用量（每个账户都有） */
+export type SettingsSub = 'invites' | 'bank' | 'usage';
 export const SUB_PATHS: Record<SettingsSub, string> = {
   invites: '/settings/invites',
+  bank: '/settings/bank',
   usage: '/settings/usage',
 };
 const SUBS = Object.keys(SUB_PATHS) as SettingsSub[];
 
 const TITLES: Record<ViewName, string> = { practice: '练习', records: '记录', settings: '设置' };
-const SUB_TITLES: Record<SettingsSub, string> = { invites: '邀请码管理', usage: 'Token 用量' };
+const SUB_TITLES: Record<SettingsSub, string> = { invites: '邀请码管理', bank: '真题题库', usage: 'Token 用量' };
 const SITE = '长难句拆解台';
 
 export interface Route {

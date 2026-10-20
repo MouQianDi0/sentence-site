@@ -109,6 +109,7 @@ sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 htt
 | 手动备份数据库 | `sudo bash scripts/backup.sh` |
 | 导入旧页面导出的数据 | `sudo docker compose exec -T api node --experimental-strip-types scripts/import.ts < 导出文件.json` |
 | 导入 / 更新四级真题题库 | `sudo docker compose exec -T api node --experimental-strip-types scripts/import-bank.ts < cet4_long_sentences.jsonl` |
+| 标注题库（每次 N 句） | `sudo docker compose exec -T api node --experimental-strip-types scripts/annotate-bank.ts --limit 50` |
 | 停止网站 | `sudo docker compose down`（数据保留在 `data/postgres`） |
 
 ## 四级真题题库
@@ -124,6 +125,18 @@ sudo bash scripts/enable-https.sh --off              # 撤掉 HTTPS，回到 htt
    ```
 
    导入完会打印各状态的句数。整份要么都写进去、要么都不写，中途出错题库不变。
+
+3. 标注：导入的句子还只是原句，要用你自己配的国内模型拆解成题（谓语、片段、知识点、主干、译文选项）才能抽。在网站“设置”→“真题题库”里点“开始标注”（后台跑，页面上看进度），或者在服务器上运行：
+
+   ```bash
+   sudo docker compose exec -T api node --experimental-strip-types scripts/annotate-bank.ts --limit 50
+   ```
+
+   `--limit` 是这次标注几句（最多 2000），`--concurrency` 是同时标注几句（默认 3）。每句大约调用 2 次主力模型（拆解 + 复核谓语），token 记在你名下的“标注题库”。可以随时 Ctrl+C，做完的已经存好，没做完的下次接着标；不要和网页上的“开始标注”同时跑。
+
+标注**永远不用 ChatGPT 套餐**，哪怕你开着 ChatGPT：标注结果所有账户都会用到，而套餐凭据只能用于你自己的请求（有测试守着这一条）。拆解要过和 AI 出题一样的严格校验（15–60 词、句号结尾、一个主句谓语、3 个译文选项），片段拼回去还要和原句一字不差（直 / 弯引号、破折号两边的空格不算），过了才“可以抽”；没过的放进“不要”并写明原因。模型出错（没配好、超时、限流）的句子留在“待标注”，下次再试。主句是并列谓语、或者由 and / but 连起来的几个主句，模型会说拆不了，也放进“不要”。
+
+“设置”→“真题题库”页面上还能：看各状态的句数；逐句处理“待看原文”的句子（原文没问题、改原文、不要）；把“不要”的改原文或重新标注；停用题库（账户不再抽到它的句子，已经抽走的不受影响）。改过的原文存在 `text_fix`，以后重新导入、原文没变时会保留。
 
 导入时按题库自己的质量状态初筛：核对过的（`reviewed`、`cloze_filled`）等着标注；拿不准的（`needs_review`）和没核对过的新句子先等你看一眼原文；选词填空还有空没填的（`incomplete_cloze`）不要。再次导入时按编号更新出处和标签；同一个编号原文变了，清掉原来的拆解、等重新标注；文件里已经没有的句子下架（已经抽给账户的那份不受影响）。
 

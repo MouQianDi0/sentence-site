@@ -363,6 +363,7 @@ type AccountRef = { id: string; role: string } | null | undefined;
  * 邀请账户第一次用到时从 accounts.llm 读出来，各自一个 AI 客户端，只用它自己填的 API 密钥。
  * routeOwner：只给你自己用的一层（按用途走 ChatGPT 套餐、出错回退到 ownerLlm，见 llm-route.ts）。
  * 邀请账户永远拿不到它——OpenAI 规定 ChatGPT 套餐的凭据只能用于连接它的这个人自己的请求。
+ * 标注题库（kind 为 annotate）哪怕是你自己也不套这一层：标注结果所有账户都会用到。
  */
 export function createSettingsHub(
   cfg: AppConfig,
@@ -399,11 +400,11 @@ export function createSettingsHub(
     return p;
   }
 
-  /** use：这次调用模型是做什么用的。只有你自己的账户会按它走 ChatGPT 套餐 */
+  /** use：这次调用模型是做什么用的。只有你自己的账户会按它走 ChatGPT 套餐（标注题库除外） */
   async function llmFor(account: AccountRef, use?: LlmUse): Promise<Llm> {
     const { llm } = await get(account);
     const owner = !account || account.role === 'owner';
-    return owner && use && routeOwner ? routeOwner(llm, use) : llm;
+    return owner && use && use.kind !== 'annotate' && routeOwner ? routeOwner(llm, use) : llm;
   }
 
   return {

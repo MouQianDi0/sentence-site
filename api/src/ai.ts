@@ -114,11 +114,39 @@ const markKey = (segs: Seg[]) =>
     .join(',');
 
 /**
+ * 让 AI 复核一批句子的谓语标注（出题、标注题库、做题时复查都用它）。返回和 items 一样长的数组，每项：
+ * {status:'ok', segs, changed, note}；{status:'unknown'}（回复里没有这一句）；{status:'mismatch'}（给的谓语在原句里找不到）
+ */
+export async function reviewPredicates(L: Llm, items: { segs: Seg[] }[], timeoutMs: number): Promise<Review[]> {
+  const r = await L.chatJson({
+    prompt: reviewPrompt(items),
+    model: L.models().main,
+    maxTokens: 400 + 250 * items.length,
+    temperature: 0.1,
+    timeoutMs: Math.max(timeoutMs, 90_000),
+  });
+  const d = r.data;
+  const items0 = obj(d)?.items;
+  const list: Loose[] = (Array.isArray(d) ? (d as unknown[]) : Array.isArray(items0) ? (items0 as unknown[]) : []).map(
+    obj,
+  );
+  return items.map((s, i): Review => {
+    const it = list.find((x) => Number(x?.i) === i + 1);
+    if (!it || !it.main) return { status: 'unknown' };
+    const spans = locate(s.segs, it.main, Array.isArray(it.sub) ? (it.sub as unknown[]) : []);
+    if (!spans) return { status: 'mismatch' };
+    const segs = markByIndex(s.segs, spans);
+    const changed = markKey(segs) !== markKey(s.segs);
+    return { status: 'ok', segs: changed ? segs : s.segs, changed, note: str(it.note, 60) };
+  });
+}
+
+/**
  * llmFor(account)：这个账户用哪个 AI 客户端（你自己用 llm；邀请账户用它自己配置的，见 createSettingsHub）。
  * 不传时所有账户都用 llm（测试里用）。
  */
 /** 复核一句的结果 */
-type Review =
+export type Review =
   { status: 'ok'; segs: Seg[]; changed: boolean; note: string } | { status: 'unknown' } | { status: 'mismatch' };
 
 export interface Ai {
@@ -143,33 +171,7 @@ export function createAi({
   llmFor?: (account: Account, use?: LlmUse) => Promise<Llm>;
   log?: Logger;
 }): Ai {
-  /**
-   * 让 AI 复核一批句子的谓语标注。返回和 items 一样长的数组，每项：
-   * {status:'ok', segs, changed, note}；{status:'unknown'}（回复里没有这一句）；{status:'mismatch'}（给的谓语在原句里找不到）
-   */
-  async function reviewMarks(L: Llm, items: { segs: Seg[] }[]): Promise<Review[]> {
-    const r = await L.chatJson({
-      prompt: reviewPrompt(items),
-      model: L.models().main,
-      maxTokens: 400 + 250 * items.length,
-      temperature: 0.1,
-      timeoutMs: Math.max(cfg.llm.timeoutMs, 90_000),
-    });
-    const d = r.data;
-    const items0 = obj(d)?.items;
-    const list: Loose[] = (
-      Array.isArray(d) ? (d as unknown[]) : Array.isArray(items0) ? (items0 as unknown[]) : []
-    ).map(obj);
-    return items.map((s, i): Review => {
-      const it = list.find((x) => Number(x?.i) === i + 1);
-      if (!it || !it.main) return { status: 'unknown' };
-      const spans = locate(s.segs, it.main, Array.isArray(it.sub) ? (it.sub as unknown[]) : []);
-      if (!spans) return { status: 'mismatch' };
-      const segs = markByIndex(s.segs, spans);
-      const changed = markKey(segs) !== markKey(s.segs);
-      return { status: 'ok', segs: changed ? segs : s.segs, changed, note: str(it.note, 60) };
-    });
-  }
+  const reviewMarks = (L: Llm, items: { segs: Seg[] }[]) => reviewPredicates(L, items, cfg.llm.timeoutMs);
 
   // 下面这些都按账户来：account 是 accounts 表的一行，只能动这个账户自己的句子
 

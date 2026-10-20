@@ -116,6 +116,8 @@ export interface FakeHandlers {
   generate?: FakeReply;
   ping?: FakeReply;
   review?: FakeReply;
+  /** 标注题库 */
+  annotate?: FakeReply;
   /** 模拟不认识 thinking 参数的严格接口 */
   strict?: boolean;
 }
@@ -152,7 +154,9 @@ export function startFakeLlm(handlers: FakeHandlers): Promise<FakeLlm> {
       };
       const prompt = data.messages.at(-1)?.content ?? '';
       calls.push({ path: req.url, auth: req.headers.authorization, data, prompt });
-      const kind: 'summary' | 'grade' | 'lookup' | 'ping' | 'review' | 'generate' = prompt.includes('汇总多份独立批改')
+      const kind: 'summary' | 'grade' | 'lookup' | 'ping' | 'review' | 'annotate' | 'generate' = prompt.includes(
+        '汇总多份独立批改',
+      )
         ? 'summary'
         : prompt.includes('<student_translation>')
           ? 'grade'
@@ -162,7 +166,9 @@ export function startFakeLlm(handlers: FakeHandlers): Promise<FakeLlm> {
               ? 'ping'
               : prompt.includes('逐句核对句子里')
                 ? 'review'
-                : 'generate';
+                : prompt.includes('真题阅读里的原句')
+                  ? 'annotate'
+                  : 'generate';
       if (kind === 'ping' && !handlers.ping) handlers.ping = () => ({ ok: true });
       // 没指定时，复核一律回复“没有意见”，句子保持原样
       if (kind === 'review' && !handlers.review) handlers.review = () => ({ items: [] });

@@ -6,7 +6,14 @@ import { setQueryImpl } from '../src/db.ts';
 import { migrate } from '../src/migrate.ts';
 import * as repo from '../src/repo.ts';
 import { CET4_BANK, initialStatus, originText, parseBankJsonl, parseBankLine, sameText } from '../src/bank.ts';
-import { createTestDb, type TestDb } from './helpers.ts';
+import { annotateItem, precheck } from '../src/annotate.ts';
+import { specExample } from '../src/spec.ts';
+import { plainText } from '../src/validate.ts';
+import { LlmError, type Llm } from '../src/llm.ts';
+import type { SentenceBody } from '@sentence-site/shared';
+import { loadConfig } from '../src/config.ts';
+import { createApp } from '../src/app.ts';
+import { createTestDb, startApp, startFakeLlm, type TestApp, type TestDb } from './helpers.ts';
 
 let db: TestDb;
 
@@ -178,4 +185,300 @@ test('导入：有一句写不进去时整份都不写（新增、更新、下�
     db.raw(`SELECT string_agg(external_id || ':' || status || ':' || text, ',' ORDER BY external_id) FROM bank_items`),
     snapshot,
   );
+});
+
+// ---- 标注 ---------------------------------------------------------------------------
+
+/** 出题规范里的示例：自己编的句子，拿来当“题库原句”和模型的拆解 */
+const EXAMPLE = specExample() as SentenceBody;
+const EXAMPLE_TEXT = plainText(EXAMPLE.segs);
+/** 改了一个词的拆解：能过严格校验，但拼回去和原句不一样 */
+const WRONG = {
+  ...EXAMPLE,
+  segs: EXAMPLE.segs.map((g, i) => (i === 0 ? { ...g, t: g.t.replace('professor', 'teacher') } : g)),
+};
+
+/** 按提示词回复的假模型；复核谓语一律“没有意见” */
+function stubLlm(reply: (prompt: string) => unknown, ready = true): Llm & { prompts: string[] } {
+  const prompts: string[] = [];
+  return {
+    prompts,
+    ready: () => ready,
+    models: () => ({ main: 'stub-main', light: 'stub-light' }),
+    listModels: async () => [],
+    async chatJson(o) {
+      prompts.push(o.prompt);
+      if (o.prompt.includes('逐句核对句子里'))
+        return { data: { items: [] }, model: 'stub-main', usage: { input: 1, output: 1 } };
+      const data = reply(o.prompt);
+      if (data instanceof Error) throw data;
+      return { data, model: 'stub-main', usage: { input: 10, output: 20 } };
+    },
+  };
+}
+
+test('标注一句：过了严格校验、拼回去等于原句才算 ready；拼回去不一样、太长、模型说不能拆的不要；模型出错留在 raw', async () => {
+  const item = { text: EXAMPLE_TEXT, textFix: null, level: 'CET-4' as const };
+  const ok = await annotateItem(
+    stubLlm(() => ({ sentence: EXAMPLE })),
+    item,
+    1000,
+  );
+  assert.equal(ok.status, 'ready');
+  assert.ok(ok.status === 'ready' && ok.body.level === 'CET-4' && plainText(ok.body.segs) === EXAMPLE_TEXT);
+
+  // 回复里直接是句子对象、或者 {sentences:[…]} 也认
+  assert.equal(
+    (
+      await annotateItem(
+        stubLlm(() => EXAMPLE),
+        item,
+        1000,
+      )
+    ).status,
+    'ready',
+  );
+  assert.equal(
+    (
+      await annotateItem(
+        stubLlm(() => ({ sentences: [EXAMPLE] })),
+        item,
+        1000,
+      )
+    ).status,
+    'ready',
+  );
+
+  // 拼回去和原句不一样：再问一次，还不一样就不要
+  const wrong = stubLlm(() => ({ sentence: WRONG }));
+  const bad = await annotateItem(wrong, item, 1000);
+  assert.deepEqual(bad.status === 'rejected' && bad.reason, '拆出来的片段拼起来和原句不一样');
+  assert.equal(wrong.prompts.length, 2);
+  // 改过原文的用改过的原文比较
+  assert.equal(
+    (
+      await annotateItem(
+        stubLlm(() => ({ sentence: EXAMPLE })),
+        { ...item, text: 'Something else entirely.', textFix: EXAMPLE_TEXT },
+        1000,
+      )
+    ).status,
+    'ready',
+  );
+  // 引号、破折号两边的空格不同也算一样
+  const quoted = {
+    ...EXAMPLE,
+    segs: EXAMPLE.segs.map((g, i) => (i === 0 ? { ...g, t: g.t.replace('The professor', '“The professor') } : g)),
+  };
+  const quotedText = EXAMPLE_TEXT.replace('The professor', '"The professor');
+  assert.equal(
+    (
+      await annotateItem(
+        stubLlm(() => ({ sentence: quoted })),
+        { ...item, text: quotedText },
+        1000,
+      )
+    ).status,
+    'ready',
+  );
+
+  // 过不了严格校验（选项不是 3 个）
+  const two = await annotateItem(
+    stubLlm(() => ({ sentence: { ...EXAMPLE, opts: EXAMPLE.opts.slice(0, 2) } })),
+    item,
+    1000,
+  );
+  assert.deepEqual(two.status === 'rejected' && two.reason, '选项必须是 3 个');
+
+  // 太长、没有句号：不用问模型
+  const none = stubLlm(() => ({ sentence: EXAMPLE }));
+  const long = await annotateItem(none, { ...item, text: `${'word '.repeat(61).trim()}.` }, 1000);
+  assert.deepEqual(long.status === 'rejected' && long.reason, '句子长度 61 词，不在 15–60 之间');
+  assert.ok(precheck('This sentence has enough words but it never ends with a full stop at all, sadly'));
+  assert.equal(precheck(`“${EXAMPLE_TEXT}”`), null, '弯引号结尾也算句号结尾');
+  assert.equal(none.prompts.length, 0);
+
+  const skip = await annotateItem(
+    stubLlm(() => ({ skip: '主句是并列谓语' })),
+    item,
+    1000,
+  );
+  assert.deepEqual(skip.status === 'rejected' && skip.reason, '模型说不能拆：主句是并列谓语');
+
+  const err = await annotateItem(
+    stubLlm(() => new LlmError('timeout', '超时了')),
+    item,
+    1000,
+  );
+  assert.equal(err.status, 'raw');
+});
+
+test('saveAnnotation：标注期间原文被改了、或者不再是 raw，这次结果作废', async () => {
+  db.raw('DELETE FROM bank_items');
+  await repo.importBank(CET4_BANK, parseBankJsonl(fakeLine('t-save', EXAMPLE_TEXT)));
+  const [item] = await repo.rawBankItems(10);
+  assert.ok(item);
+  db.raw(`UPDATE bank_items SET text_fix = 'Changed while annotating.' WHERE id = ${item.id}`);
+  assert.equal(await repo.saveAnnotation(item, { status: 'ready', body: EXAMPLE, by: 'stub' }), false);
+  const fresh = await repo.getBankItem(item.id);
+  assert.ok(fresh);
+  assert.equal(await repo.saveAnnotation(fresh, { status: 'rejected', reason: '不要' }), true);
+  assert.equal(await repo.saveAnnotation(fresh, { status: 'ready', body: EXAMPLE, by: 'stub' }), false, '已经不是 raw');
+});
+
+// ---- 管理接口（只有你自己能用）--------------------------------------------------------
+
+const quiet = { log() {}, error: (...a: unknown[]) => process.env.DEBUG_TEST && console.error(...a), warn() {} };
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** 起一个网站：owner 和一个邀请账户各登录好 */
+async function siteWithMember(): Promise<{ owner: TestApp; member: TestApp; memberId: string; close(): void }> {
+  const cfg = loadConfig({ ACCESS_PASSWORD: 'pw-bank', COOKIE_SECRET: 'b'.repeat(64), DAILY_GENERATE: '0' });
+  const handler = createApp(cfg, { log: quiet });
+  const owner = await startApp(handler);
+  const member = await startApp(handler);
+  await owner.api('POST', '/api/unlock', { password: 'pw-bank' });
+  const inv = (await owner.api('POST', '/api/admin/invites', { note: '题库测试' })).body.invite;
+  assert.equal((await member.api('POST', '/api/unlock', { password: inv.code })).status, 200);
+  return {
+    owner,
+    member,
+    memberId: inv.id,
+    close: () => {
+      owner.close();
+      member.close();
+    },
+  };
+}
+
+test('网站：邀请账户用不了题库管理接口', async () => {
+  const site = await siteWithMember();
+  try {
+    const calls: [string, string, unknown?][] = [
+      ['GET', '/api/admin/bank'],
+      ['GET', '/api/admin/bank/items?status=review'],
+      ['POST', '/api/admin/bank/items/1/confirm'],
+      ['PUT', '/api/admin/bank/items/1', { text: 'x' }],
+      ['POST', '/api/admin/bank/items/1/reject'],
+      ['POST', '/api/admin/bank/items/1/requeue'],
+      ['POST', '/api/admin/bank/annotate', { limit: 1 }],
+      ['PUT', `/api/admin/bank/${CET4_BANK.id}`, { enabled: false }],
+    ];
+    for (const [method, path, body] of calls) {
+      assert.equal((await site.member.api(method, path, body)).status, 403, `${method} ${path}`);
+    }
+  } finally {
+    site.close();
+  }
+});
+
+test('网站：看各状态句数、确认原文、改原文、不要、重新标注、停用题库', async () => {
+  db.raw('DELETE FROM bank_items');
+  await repo.importBank(
+    CET4_BANK,
+    parseBankJsonl(
+      [
+        fakeLine('t-review', 'This sentence needs a quick look at the original text before it can be used.', {
+          quality_status: 'needs_review',
+        }),
+        fakeLine('t-raw', 'This sentence has already been checked and is waiting to be annotated today.'),
+      ].join('\n'),
+    ),
+  );
+  const site = await siteWithMember();
+  try {
+    const { owner } = site;
+    const view = (await owner.api('GET', '/api/admin/bank')).body;
+    assert.equal(view.banks[0].id, CET4_BANK.id);
+    assert.equal(view.banks[0].enabled, true);
+    assert.deepEqual(view.banks[0].counts, { review: 1, raw: 1, ready: 0, rejected: 0, retired: 0 });
+    assert.equal(view.llmReady, false);
+
+    const list = (await owner.api('GET', '/api/admin/bank/items?status=review')).body;
+    assert.equal(list.total, 1);
+    const item = list.items[0];
+    assert.equal(item.externalId, 't-review');
+    assert.equal(item.origin, '四级真题 2023 年 12 月第 2 套 · 仔细阅读');
+    assert.equal((await owner.api('GET', '/api/admin/bank/items?status=nope')).status, 400);
+
+    // 确认原文：review → raw；再确认一次状态不对
+    assert.equal((await owner.api('POST', `/api/admin/bank/items/${item.id}/confirm`)).body.item.status, 'raw');
+    assert.equal((await owner.api('POST', `/api/admin/bank/items/${item.id}/confirm`)).status, 409);
+    // 改原文：存成 text_fix；改回和原文一样时清空
+    const fixed = (await owner.api('PUT', `/api/admin/bank/items/${item.id}`, { text: '  Fixed   text here.  ' })).body
+      .item;
+    assert.deepEqual([fixed.status, fixed.textFix], ['raw', 'Fixed text here.']);
+    const back = (await owner.api('PUT', `/api/admin/bank/items/${item.id}`, { text: item.text })).body.item;
+    assert.equal(back.textFix, null);
+    // 不要，再重新标注
+    const rej = (await owner.api('POST', `/api/admin/bank/items/${item.id}/reject`, { reason: '太简单' })).body.item;
+    assert.deepEqual([rej.status, rej.rejectReason], ['rejected', '太简单']);
+    const again = (await owner.api('POST', `/api/admin/bank/items/${item.id}/requeue`)).body.item;
+    assert.deepEqual([again.status, again.rejectReason], ['raw', null]);
+    assert.equal((await owner.api('POST', '/api/admin/bank/items/999999/requeue')).status, 409);
+    assert.equal((await owner.api('POST', '/api/admin/bank/items/abc/requeue')).status, 404);
+
+    // 没配国内模型时不能开始标注
+    assert.equal((await owner.api('POST', '/api/admin/bank/annotate', { limit: 5 })).status, 503);
+
+    assert.equal((await owner.api('PUT', `/api/admin/bank/${CET4_BANK.id}`, { enabled: false })).status, 200);
+    assert.equal((await owner.api('GET', '/api/admin/bank')).body.banks[0].enabled, false);
+    assert.equal((await owner.api('PUT', '/api/admin/bank/nope', { enabled: false })).status, 404);
+    await owner.api('PUT', `/api/admin/bank/${CET4_BANK.id}`, { enabled: true });
+  } finally {
+    site.close();
+  }
+});
+
+test('网站：后台标注用你自己的国内模型，token 记在你名下（标注题库），拼回去不对的不要', async () => {
+  db.raw('DELETE FROM bank_items');
+  db.raw(`DELETE FROM token_usage WHERE kind = 'annotate'`);
+  await repo.importBank(
+    CET4_BANK,
+    parseBankJsonl(
+      [
+        fakeLine('t-good', EXAMPLE_TEXT),
+        fakeLine('t-wrong', 'The model will answer this one with a different sentence, so it gets thrown away.'),
+        fakeLine('t-later', 'This one stays raw because the batch only takes two sentences at a time today.'),
+      ].join('\n'),
+    ),
+  );
+  const fake = await startFakeLlm({
+    annotate: (prompt) => ({ sentence: prompt.includes(EXAMPLE_TEXT) ? EXAMPLE : WRONG }),
+  });
+  const site = await siteWithMember();
+  try {
+    const { owner } = site;
+    await owner.api('PUT', '/api/settings/llm', { baseUrl: fake.url, apiKey: 'k', mainModel: 'fake-main' });
+    assert.equal((await owner.api('GET', '/api/admin/bank')).body.llmReady, true);
+    const started = await owner.api('POST', '/api/admin/bank/annotate', { limit: 2 });
+    assert.equal(started.status, 200);
+    assert.equal(started.body.job.running, true);
+    assert.equal((await owner.api('POST', '/api/admin/bank/annotate', { limit: 2 })).status, 409, '同时只跑一批');
+    let job = started.body.job;
+    for (let i = 0; i < 100 && job.running; i++) {
+      await sleep(50);
+      job = (await owner.api('GET', '/api/admin/bank')).body.job;
+    }
+    assert.deepEqual([job.running, job.total, job.done, job.ready, job.rejected, job.failed], [false, 2, 2, 1, 1, 0]);
+    assert.equal(row('t-good', 'status'), 'ready');
+    assert.equal(row('t-good', `body->>'level'`), 'CET-4');
+    assert.equal(row('t-wrong', 'status || reject_reason'), 'rejected拆出来的片段拼起来和原句不一样');
+    assert.equal(row('t-later', 'status'), 'raw');
+    assert.equal(row('t-good', 'annotated_by'), 'fake-main');
+    // token 记在 owner 名下，用途 annotate；邀请账户没有
+    assert.equal(
+      db.raw(`SELECT string_agg(DISTINCT account_id, ',') FROM token_usage WHERE kind = 'annotate'`).trim(),
+      'owner',
+    );
+    const stats = (await owner.api('GET', '/api/usage/tokens')).body;
+    assert.ok(stats.byKind.some((k: { kind: string }) => k.kind === 'annotate'));
+    assert.ok(
+      fake.calls.every((c) => c.auth === 'Bearer k'),
+      '用的是你自己的密钥',
+    );
+  } finally {
+    site.close();
+    fake.close();
+  }
 });

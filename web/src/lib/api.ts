@@ -1,6 +1,10 @@
 // 和后端说话。401 时通知页面回到输密码的界面。返回值的类型来自 @sentence-site/shared，和后端一致。
 import type {
   Attempt,
+  BankAdmin,
+  BankItem,
+  BankJob,
+  BankStatus,
   ChatgptDisconnect,
   ChatgptModel,
   ChatgptStart,
@@ -87,6 +91,20 @@ export const api = {
     request<{ invite: Invite }>('PUT', `/api/admin/invites/${enc(id)}`, { deviceLimit }),
   removeDevice: (id: string, deviceId: string) =>
     request<{ invite: Invite }>('DELETE', `/api/admin/invites/${enc(id)}/devices/${enc(deviceId)}`),
+
+  // 真题题库（只有你自己能管理）
+  bank: () => request<BankAdmin>('GET', '/api/admin/bank'),
+  bankItems: (status: BankStatus, offset = 0) =>
+    request<{ items: BankItem[]; total: number }>('GET', `/api/admin/bank/items?status=${status}&offset=${offset}`),
+  bankConfirm: (id: number) => request<{ item: BankItem }>('POST', `/api/admin/bank/items/${id}/confirm`),
+  /** 改原文：存成改过的原文，退回待标注 */
+  bankFix: (id: number, text: string) => request<{ item: BankItem }>('PUT', `/api/admin/bank/items/${id}`, { text }),
+  bankReject: (id: number) => request<{ item: BankItem }>('POST', `/api/admin/bank/items/${id}/reject`),
+  bankRequeue: (id: number) => request<{ item: BankItem }>('POST', `/api/admin/bank/items/${id}/requeue`),
+  /** 在后台标注 limit 句，马上返回进度 */
+  bankAnnotate: (limit: number) => request<{ job: BankJob }>('POST', '/api/admin/bank/annotate', { limit }),
+  setBankEnabled: (id: string, enabled: boolean) =>
+    request<{ ok: true }>('PUT', `/api/admin/bank/${enc(id)}`, { enabled }),
 
   // 句库
   sentences: (since?: string) =>

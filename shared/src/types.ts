@@ -172,8 +172,8 @@ export interface Usage {
 }
 
 // ---- token 用量 -----------------------------------------------------------------
-/** 用到模型的地方：批改、查词、出题、复核谓语、测试连接 */
-export type TokenKind = 'grade' | 'lookup' | 'generate' | 'review' | 'test';
+/** 用到模型的地方：批改、查词、出题、复核谓语、测试连接、标注题库（只有 owner，永远不走 ChatGPT） */
+export type TokenKind = 'grade' | 'lookup' | 'generate' | 'review' | 'test' | 'annotate';
 
 /** 一段时间里的用量：输入、输出 token 数和调用次数 */
 export interface TokenCount {
@@ -240,6 +240,56 @@ export interface Invite {
   expiresAt: string | null;
   /** 已经过期：对方登不进来，数据还在，改有效期就能续上 */
   expired: boolean;
+}
+
+// ---- 外部题库（只有你自己能管理）---------------------------------------------------
+/** review 原文要看一眼；raw 等着标注；ready 能抽；rejected 不要；retired 最近一次导入的文件里没有了 */
+export type BankStatus = 'review' | 'raw' | 'ready' | 'rejected' | 'retired';
+
+/** 后台标注的进度（同一时间只跑一批） */
+export interface BankJob {
+  running: boolean;
+  total: number;
+  done: number;
+  ready: number;
+  rejected: number;
+  /** 模型出错、留在 raw 等下次的句数 */
+  failed: number;
+  startedAt: string;
+  finishedAt: string | null;
+  /** 停下来的原因（模型没配好、密钥无效……），正常跑完是空字符串 */
+  error: string;
+}
+
+/** GET /api/admin/bank */
+export interface BankAdmin {
+  banks: {
+    id: string;
+    name: string;
+    enabled: boolean;
+    importedAt: string | null;
+    counts: Record<BankStatus, number>;
+  }[];
+  job: BankJob | null;
+  /** 标注用的国内模型配好了没有（标注不用 ChatGPT） */
+  llmReady: boolean;
+}
+
+/** 管理页列出的一句 */
+export interface BankItem {
+  id: number;
+  bankId: string;
+  externalId: string;
+  text: string;
+  /** 改过的原文；没改过是 null */
+  textFix: string | null;
+  status: BankStatus;
+  /** 题库自己的质量状态 */
+  srcQuality: string;
+  rejectReason: string | null;
+  origin: string;
+  tags: string[];
+  updatedAt: string;
 }
 
 // ---- 设置 --------------------------------------------------------------------

@@ -790,6 +790,42 @@ test('邀请账户：模型设置中心永远不给它 ChatGPT，哪怕它没配
   }
 });
 
+test('标注题库：哪怕是你自己、哪怕所有用途和后台都开着，也永远不走 ChatGPT', async () => {
+  // 标注结果所有账户都会用到，而 OpenAI 规定套餐凭据只能用于连接它的这个人自己的请求。这一条不许改
+  const { svc } = await connected(fake, unitCfg);
+  await svc.save({ use: { grade: true, generate: true, lookup: true }, background: true });
+  const sent = fake.bodies.length;
+  const calls: string[] = [];
+  const domestic = {
+    ready: () => true,
+    models: () => ({ main: 'deepseek-main', light: 'deepseek-light' }),
+    listModels: async () => [],
+    chatJson: async (o: { model: string }) => {
+      calls.push(o.model);
+      return { data: { from: 'domestic' }, model: o.model, usage: { input: 1, output: 1 } };
+    },
+  };
+  for (const background of [false, true]) {
+    const L = routeLlm({ plan: svc, fallback: domestic, use: { kind: 'annotate', background }, log: quiet });
+    assert.equal(L.models().main, 'deepseek-main');
+    assert.deepEqual((await L.chatJson({ prompt: 'x', model: L.models().main })).data, { from: 'domestic' });
+  }
+  assert.deepEqual(calls, ['deepseek-main', 'deepseek-main']);
+  assert.equal(fake.bodies.length, sent, '一次都没有请求 OpenAI');
+
+  // 模型设置中心：你自己的 annotate 拿到的就是国内模型本身，不套 ChatGPT 那一层
+  const hub = createSettingsHub(unitCfg, {
+    ownerSvc: createSettings(unitCfg, { store: { get: async () => null, put: async () => {} } }),
+    ownerLlm: domestic,
+    createLlm,
+    routeOwner: (base, use) => routeLlm({ plan: svc, fallback: base, use, log: quiet }),
+  });
+  const owner = { id: 'owner', role: 'owner' };
+  assert.equal((await hub.llmFor(owner, { kind: 'grade' })).models().main, 'gpt-test', '改题照常走 ChatGPT');
+  assert.equal(await hub.llmFor(owner, { kind: 'annotate' }), domestic);
+  assert.equal(await hub.llmFor(owner, { kind: 'annotate', background: true }), domestic);
+});
+
 // ---- 整个网站（数据库 + 代理 + 两个账户） ---------------------------------------------------
 
 let db: TestDb, domestic: FakeLlm, memberFake: FakeLlm, proxy: FakeProxy, owner: TestApp, member: TestApp;

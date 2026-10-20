@@ -1,6 +1,6 @@
 // 路由和请求处理。createApp() 返回一个 (req, res) 处理函数，测试里也直接用它。
 import type { IncomingMessage, ServerResponse, OutgoingHttpHeaders } from 'node:http';
-import type { AccountRole, ChatgptDisconnect, Invite, LlmTestItem } from '@sentence-site/shared';
+import type { AccountRole, BankItem, BankStatus, ChatgptDisconnect, Invite, LlmTestItem } from '@sentence-site/shared';
 import type { AppConfig } from './config.ts';
 import * as repo from './repo.ts';
 import type { AccountRow } from './repo.ts';
@@ -23,6 +23,8 @@ import { createChatgpt, type ChatgptService } from './chatgpt.ts';
 import { routeLlm, type LlmUse } from './llm-route.ts';
 import { createAccounts, memberVersion, newDeviceId, isDeviceId, isExpired, EXPIRED_MESSAGE } from './accounts.ts';
 import { shanghaiDate } from './time.ts';
+import { createAnnotator, ANNOTATE_USE, type Annotator } from './annotate.ts';
+import { BANK_STATUSES, originText } from './bank.ts';
 
 /** 处理函数拿到的东西。不需要登录的接口里 account 是 null，不要读它 */
 interface Ctx {
@@ -50,6 +52,8 @@ export interface AppDeps {
   ai?: Ai | null;
   /** ChatGPT 套餐（只给你自己用）；不传时自己建一个 */
   chatgpt?: ChatgptService | null;
+  /** 标注题库（只用国内模型）；不传时自己建一个 */
+  annotator?: Annotator | null;
   log?: Logger;
 }
 
@@ -76,6 +80,7 @@ export function createApp(
     hub: hubIn = null,
     ai: aiIn = null,
     chatgpt: chatgptIn = null,
+    annotator: annotatorIn = null,
     log = console,
   }: AppDeps = {},
 ) {
@@ -93,6 +98,8 @@ export function createApp(
   const hub = hubIn || createSettingsHub(cfg, { ownerSvc: settingsSvc, ownerLlm: llm, createLlm, routeOwner });
   const ai = aiIn || createAi({ cfg, llm, llmFor: hub.llmFor, log });
   const practiceSvc = practice || createPractice(cfg);
+  // 标注题库：只用你自己配的国内模型，永远不走 ChatGPT（llmFor 对 annotate 用途不套 ChatGPT）
+  const annotator = annotatorIn || createAnnotator({ cfg, llmFor: hub.llmFor, log });
   const settingsReady = Promise.all([
     settings ? null : settingsSvc.load().catch((e: Error) => log.error('[settings]', e.message)),
     chatgptIn ? null : chatgpt.load().catch((e: Error) => log.error('[chatgpt]', e.message)),
@@ -314,6 +321,124 @@ export function createApp(
     async ({ params }) => {
       await accounts.remove(params.id);
       hub.drop(params.id);
+      return { body: { ok: true } };
+    },
+    ownerOnly,
+  );
+
+  // ---- 外部题库（全站一份，只有你自己能管理）-----------------------------------------
+  const bankItem = (r: repo.BankItemRow): BankItem => ({
+    id: r.id,
+    bankId: r.bankId,
+    externalId: r.externalId,
+    text: r.text,
+    textFix: r.textFix,
+    status: r.status,
+    srcQuality: r.srcQuality,
+    rejectReason: r.rejectReason,
+    origin: originText({ level: r.level, year: r.examYear, month: r.examMonth, paper: r.paper, section: r.section }),
+    tags: r.tags,
+    updatedAt: r.updatedAt,
+  });
+  const itemId = (v: string): number => {
+    const n = Number(v);
+    if (!Number.isSafeInteger(n) || n < 1) throw new HttpError(404, '题库里没有这一句');
+    return n;
+  };
+  const changed = (r: repo.BankItemRow | null) => {
+    if (!r) throw new HttpError(409, '这一句不存在，或者现在的状态不能这样改，刷新一下再试');
+    return { body: { item: bankItem(r) } };
+  };
+
+  // 各题库、各状态的句数，后台标注的进度
+  router.add(
+    'GET',
+    '/api/admin/bank',
+    async () => {
+      const banks = await repo.listBanks();
+      return {
+        body: {
+          banks: await Promise.all(banks.map(async (b) => ({ ...b, counts: await repo.bankCounts(b.id) }))),
+          job: annotator.job(),
+          llmReady: (await hub.llmFor({ id: 'owner', role: 'owner' }, ANNOTATE_USE)).ready(),
+        },
+      };
+    },
+    ownerOnly,
+  );
+  // ?status=review|raw|ready|rejected|retired&offset=0：某个状态的句子（每次 50 句）
+  router.add(
+    'GET',
+    '/api/admin/bank/items',
+    async ({ url }) => {
+      const status = (url.searchParams.get('status') || 'review') as BankStatus;
+      if (!BANK_STATUSES.includes(status)) throw new HttpError(400, '状态只能是 review、raw、ready、rejected、retired');
+      const offset = Math.max(0, Math.floor(Number(url.searchParams.get('offset')) || 0));
+      const { items, total } = await repo.listBankItems(status, 50, offset);
+      return { body: { items: items.map(bankItem), total } };
+    },
+    ownerOnly,
+  );
+  // 原文没问题：review → raw，等着标注
+  router.add(
+    'POST',
+    '/api/admin/bank/items/:id/confirm',
+    async ({ params }) => changed(await repo.updateBankItem(itemId(params.id), { kind: 'confirm' })),
+    ownerOnly,
+  );
+  // {text}：改原文（存成 text_fix），清掉拆解，退回 raw 重新标注
+  router.add(
+    'PUT',
+    '/api/admin/bank/items/:id',
+    async ({ req, params }) => {
+      const text = String((await readJson(req)).text ?? '')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!text) throw new HttpError(400, '原文不能是空的');
+      if (text.length > 1000) throw new HttpError(400, '原文太长了');
+      return changed(await repo.updateBankItem(itemId(params.id), { kind: 'fix', text }));
+    },
+    ownerOnly,
+  );
+  // 不要这一句；{reason} 可以不填
+  router.add(
+    'POST',
+    '/api/admin/bank/items/:id/reject',
+    async ({ req, params }) => {
+      const reason =
+        String((await readJson(req)).reason ?? '')
+          .trim()
+          .slice(0, 200) || '管理员不要';
+      return changed(await repo.updateBankItem(itemId(params.id), { kind: 'reject', reason }));
+    },
+    ownerOnly,
+  );
+  // 重新标注：清掉拆解和原因，退回 raw
+  router.add(
+    'POST',
+    '/api/admin/bank/items/:id/requeue',
+    async ({ params }) => changed(await repo.updateBankItem(itemId(params.id), { kind: 'requeue' })),
+    ownerOnly,
+  );
+  // {limit}：在后台标注 limit 句（1–2000）raw 的句子，马上返回进度
+  router.add(
+    'POST',
+    '/api/admin/bank/annotate',
+    async ({ req }) => {
+      const limit = Number((await readJson(req)).limit ?? 20);
+      if (!Number.isInteger(limit) || limit < 1 || limit > 2000) throw new HttpError(400, '一次标注 1–2000 句');
+      return { body: { job: await annotator.start({ limit }) } };
+    },
+    ownerOnly,
+  );
+  // {enabled}：停用的题库不再被抽到（已经抽走的句子不受影响）
+  router.add(
+    'PUT',
+    '/api/admin/bank/:bankId',
+    async ({ req, params }) => {
+      const enabled = (await readJson(req)).enabled;
+      if (typeof enabled !== 'boolean') throw new HttpError(400, 'enabled 要是 true 或 false');
+      if (!(await repo.setBankEnabled(params.bankId, enabled))) throw new HttpError(404, '没有这个题库');
       return { body: { ok: true } };
     },
     ownerOnly,

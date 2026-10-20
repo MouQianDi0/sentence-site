@@ -2,12 +2,12 @@
 // 题库文件本身不放进仓库（仓库是公开的），在服务器上用 scripts/import-bank.ts 从标准输入导入。
 // JSONL 每行一句，字段见题库的 README：id、text_en、level、structures、complexity_score、quality_status、
 // text_source、text_raw、cloze、sources（[{year, month, set_number, section, passage, locator, file}]）。
-import type { Level } from '@sentence-site/shared';
+import type { BankStatus, Level } from '@sentence-site/shared';
 
 /** 现在只有这一个题库 */
 export const CET4_BANK = { id: 'cet4-reading', name: '四级真题阅读长难句' };
 
-export type BankStatus = 'review' | 'raw' | 'ready' | 'rejected' | 'retired';
+export type { BankStatus };
 export const BANK_STATUSES: BankStatus[] = ['review', 'raw', 'ready', 'rejected', 'retired'];
 
 /** 要写进 bank_items 的一行（字段名和列名一样，整批交给 jsonb_to_recordset） */

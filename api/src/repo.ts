@@ -3,6 +3,7 @@ import type {
   AccountRole,
   Attempt,
   Feedback,
+  Level,
   PracticeRecord,
   RecordPatch,
   Sentence,
@@ -687,4 +688,120 @@ export async function bankCounts(bankId: string | null = null): Promise<BankCoun
   const out = Object.fromEntries(BANK_STATUSES.map((s) => [s, 0])) as BankCounts;
   for (const r of rows) out[r.status] = Number(r.n);
   return out;
+}
+
+/** 管理页、标注用到的一句（原文、状态、出处） */
+export interface BankItemRow {
+  id: number;
+  bankId: string;
+  externalId: string;
+  text: string;
+  textFix: string | null;
+  level: Level;
+  status: BankStatus;
+  srcQuality: string;
+  rejectReason: string | null;
+  examYear: number | null;
+  examMonth: number | null;
+  paper: number | null;
+  section: string | null;
+  tags: string[];
+  updatedAt: string;
+}
+
+const BANK_ITEM_COLS = `id::int AS id, bank_id AS "bankId", external_id AS "externalId", text, text_fix AS "textFix", level,
+  status, src_quality AS "srcQuality", reject_reason AS "rejectReason", exam_year AS "examYear", exam_month AS "examMonth",
+  paper, section, tags, to_json(updated_at)#>>'{}' AS "updatedAt"`;
+
+export async function listBanks(): Promise<
+  { id: string; name: string; enabled: boolean; importedAt: string | null }[]
+> {
+  const { rows } = await query<{ id: string; name: string; enabled: boolean; importedAt: string | null }>(
+    `SELECT id, name, enabled, to_json(imported_at)#>>'{}' AS "importedAt" FROM banks ORDER BY created_at, id`,
+  );
+  return rows;
+}
+
+/** 停用的题库不再被抽到（已经抽走的不受影响）；返回是否找到这个题库 */
+export async function setBankEnabled(id: string, enabled: boolean): Promise<boolean> {
+  const { rowCount } = await query('UPDATE banks SET enabled = $2 WHERE id = $1', [id, enabled]);
+  return rowCount > 0;
+}
+
+/** 某个状态的句子，最近改过的在前；total 是这个状态一共多少句 */
+export async function listBankItems(
+  status: BankStatus,
+  limit = 50,
+  offset = 0,
+): Promise<{ items: BankItemRow[]; total: number }> {
+  const { rows } = await query<BankItemRow>(
+    `SELECT ${BANK_ITEM_COLS} FROM bank_items WHERE status = $1 ORDER BY updated_at DESC, id LIMIT $2 OFFSET $3`,
+    [status, limit, offset],
+  );
+  const { rows: n } = await query<Count>('SELECT count(*)::int AS n FROM bank_items WHERE status = $1', [status]);
+  return { items: rows, total: Number(n[0]?.n ?? 0) };
+}
+
+export async function getBankItem(id: number): Promise<BankItemRow | null> {
+  const { rows } = await query<BankItemRow>(`SELECT ${BANK_ITEM_COLS} FROM bank_items WHERE id = $1`, [id]);
+  return rows[0] || null;
+}
+
+/** 等着标注的句子（raw），按编号顺序取 limit 句 */
+export async function rawBankItems(limit: number): Promise<BankItemRow[]> {
+  const { rows } = await query<BankItemRow>(
+    `SELECT ${BANK_ITEM_COLS} FROM bank_items WHERE status = 'raw' ORDER BY id LIMIT $1`,
+    [limit],
+  );
+  return rows;
+}
+
+/**
+ * 存标注结果（ready + 拆解，或者 rejected + 原因）。只在这句还是 raw、原文和标注时用的一样时才存：
+ * 标注期间你在管理页改了原文或者不要了，这次的结果作废。返回是否存上了。
+ */
+export async function saveAnnotation(
+  item: Pick<BankItemRow, 'id' | 'text' | 'textFix'>,
+  r: { status: 'ready'; body: SentenceBody; by: string } | { status: 'rejected'; reason: string; by?: string },
+): Promise<boolean> {
+  const { rowCount } = await query(
+    `UPDATE bank_items SET status = $2, body = $3::jsonb, reject_reason = $4, annotated_by = $5, updated_at = now()
+     WHERE id = $1 AND status = 'raw' AND text = $6 AND text_fix IS NOT DISTINCT FROM $7`,
+    [
+      item.id,
+      r.status,
+      r.status === 'ready' ? json(r.body) : null,
+      r.status === 'rejected' ? r.reason.slice(0, 300) : null,
+      r.by ?? null,
+      item.text,
+      item.textFix,
+    ],
+  );
+  return rowCount > 0;
+}
+
+/**
+ * 管理页上的操作，返回改过的这句（找不到、或者当前状态不能这样改时返回 null）：
+ * - confirm：原文没问题（review → raw）
+ * - fix：改原文（存 text_fix，和原文一样时清空），清掉拆解，退回 raw 重新标注
+ * - reject：不要（任何状态 → rejected）
+ * - requeue：重新标注（rejected / ready / review → raw，清掉拆解和原因）
+ */
+export async function updateBankItem(
+  id: number,
+  action:
+    { kind: 'confirm' } | { kind: 'fix'; text: string } | { kind: 'reject'; reason: string } | { kind: 'requeue' },
+): Promise<BankItemRow | null> {
+  const sql = {
+    confirm: `UPDATE bank_items SET status = 'raw', updated_at = now() WHERE id = $1 AND status = 'review'`,
+    fix: `UPDATE bank_items SET text_fix = NULLIF($2, text), status = 'raw', body = NULL, reject_reason = NULL,
+            annotated_by = NULL, updated_at = now() WHERE id = $1 AND status <> 'retired'`,
+    reject: `UPDATE bank_items SET status = 'rejected', reject_reason = $2, updated_at = now()
+               WHERE id = $1 AND status <> 'retired'`,
+    requeue: `UPDATE bank_items SET status = 'raw', body = NULL, reject_reason = NULL, annotated_by = NULL,
+                updated_at = now() WHERE id = $1 AND status IN ('rejected', 'ready', 'review')`,
+  }[action.kind];
+  const arg = action.kind === 'fix' ? action.text : action.kind === 'reject' ? action.reason : null;
+  const { rowCount } = await query(sql, arg === null ? [id] : [id, arg]);
+  return rowCount > 0 ? getBankItem(id) : null;
 }

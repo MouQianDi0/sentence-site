@@ -1,6 +1,7 @@
 // 你自己（owner）的 AI 客户端：按用途决定走 ChatGPT 套餐还是国内模型；ChatGPT 这次出错（额度用完、授权失效、
 // 网络不通……）就自动改用国内模型。模型回复了但格式不对（invalid_json）不回退，交给调用方原来的重试逻辑。
 // 邀请账户不经过这里（见 settings.ts 的 createSettingsHub），所以永远不会用到你的 ChatGPT 凭据。
+// 标注题库（annotate）也永远不走 ChatGPT：标注结果所有账户都会用到，而套餐凭据只能用于你自己的请求。
 import type { TokenKind } from '@sentence-site/shared';
 import { LlmError, type Llm } from './llm.ts';
 
@@ -29,7 +30,7 @@ export function routeLlm({
   use: LlmUse;
   log?: Logger;
 }): Llm {
-  const onPlan = () => plan.usable(use);
+  const onPlan = () => use.kind !== 'annotate' && plan.usable(use);
 
   /** 调用方是按 ChatGPT 的模型名（主力 / 轻量）来的，改用国内模型时换成国内模型对应的那个 */
   const toFallback = (model: string): string => {

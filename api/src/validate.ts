@@ -87,7 +87,7 @@ export function checkSentence(input: unknown, { strict = false } = {}): CheckRes
   if (strict) {
     const words = plain.split(' ').length;
     if (words < 15 || words > 60) return { ok: false, reason: `句子长度 ${words} 词，不在 15–60 之间` };
-    if (!/[.!?]["']?$/.test(plain)) return { ok: false, reason: '句子没有以句号结尾' };
+    if (!/[.!?]["'”’]?$/.test(plain)) return { ok: false, reason: '句子没有以句号结尾' };
   }
 
   const list = (v: unknown): Loose[] => (Array.isArray(v) ? (v as unknown[]).map(obj) : []);
