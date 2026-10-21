@@ -5,7 +5,7 @@ import * as repo from './repo.ts';
 import { LlmError, type ChatJsonResult, type Llm } from './llm.ts';
 import { shanghaiDate } from './time.ts';
 
-export const TOKEN_KINDS: TokenKind[] = ['grade', 'lookup', 'generate', 'review', 'test', 'annotate'];
+export const TOKEN_KINDS: TokenKind[] = ['grade', 'lookup', 'generate', 'review', 'test', 'annotate', 'analyze'];
 /** 统计页能选的范围（天） */
 export const TOKEN_RANGES = [7, 30, 90];
 

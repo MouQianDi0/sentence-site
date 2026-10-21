@@ -239,7 +239,7 @@ export function createChatgpt({
 
   function allowed(u: LlmUse): boolean {
     const set = use();
-    if (u.kind === 'grade') return set.grade;
+    if (u.kind === 'grade' || u.kind === 'analyze') return set.grade; // 学习分析算改题的一部分
     if (u.kind === 'generate' || u.kind === 'review') return set.generate; // 谓语复核算出题的一部分
     if (u.kind === 'lookup') return set.lookup;
     return false; // 测试国内模型的连接不走 ChatGPT

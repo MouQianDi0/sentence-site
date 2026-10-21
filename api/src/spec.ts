@@ -24,6 +24,12 @@ export const spec = (name: SpecSection): string => SECTIONS[name];
 /** 规范“知识点”一段列出的键（- key：说明） */
 export const specKbKeys = (): string[] => [...SECTIONS.kb.matchAll(/^- ([a-z_]+)：/gm)].map((m) => m[1] ?? '');
 
+/** 规范“知识点”一段里每个键的简短名称：说明里第一个“（”或“，”之前的部分，例如 adv_concession → 让步状语从句 */
+export const specKbNames = (): Record<string, string> =>
+  Object.fromEntries(
+    [...SECTIONS.kb.matchAll(/^- ([a-z_]+)：([^（，\n]+)/gm)].map((m) => [m[1] ?? '', (m[2] ?? '').trim()]),
+  );
+
 /** 规范里的完整示例句子（JSON） */
 export const specExample = (): unknown => {
   const m = /```json\s*([\s\S]*?)```/.exec(SECTIONS.example);

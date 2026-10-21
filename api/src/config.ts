@@ -28,7 +28,7 @@ export interface AppConfig {
   envLlm?: LlmConfig;
   /** 发往 OpenAI（ChatGPT 套餐）的请求走的 HTTP 代理，例如服务器上的 Clash；空表示直连 */
   openaiProxy: string;
-  limits: { grade: number; lookup: number; generate: number };
+  limits: { grade: number; lookup: number; generate: number; analyze: number };
   daily: { enabled: boolean; hour: number; minute: number; count: number };
   seedFile: string;
 }
@@ -65,6 +65,7 @@ export function loadConfig(e: Env = process.env): AppConfig {
       grade: num(e.DAILY_GRADE_LIMIT, 100),
       lookup: num(e.DAILY_LOOKUP_LIMIT, 300),
       generate: num(e.DAILY_GENERATE_LIMIT, 10),
+      analyze: num(e.DAILY_ANALYZE_LIMIT, 5),
     },
     daily: {
       enabled: e.DAILY_GENERATE !== '0',

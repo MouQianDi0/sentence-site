@@ -2,6 +2,31 @@
 
 所有代码变更都记在这里，新的在最上面。时间是北京时间。
 
+## 2026-10-22 03:47:36
+
+**变更类型**：新功能
+
+**变更概述**：记录页新增“AI 学习分析”。批改过 3 句以后点“开始分析”，后端汇总这个账户的批改和练习记录交给主力模型，写一份报告：总评、学习曲线怎么看、做得好的、要改的翻译习惯（带自己译文里的例子，能点回那句）、薄弱的结构、接下来怎么练。报告存下来，记录页显示最新一份；再分析时带上上一份的要点。每天限 `DAILY_ANALYZE_LIMIT` 次（默认 5）。
+
+**修改的文件**
+
+- 新增 `api/src/analysis.ts`、`api/src/migrations/0006_analyses.sql`、`api/test/analysis.test.ts`、`web/src/analysis.ts`
+- 修改 `shared/src/types.ts`
+- 修改 `api/src/ai.ts`、`api/src/app.ts`、`api/src/prompts.ts`、`api/src/repo.ts`、`api/src/spec.ts`、`api/src/config.ts`、`api/src/tokens.ts`、`api/src/chatgpt.ts`
+- 修改 `web/src/records.ts`、`web/src/state.ts`、`web/src/lib/api.ts`、`web/src/settings/usage.ts`、`web/src/settings/chatgpt-settings.ts`
+- 修改 `api/test/helpers.ts`
+- 修改 `.env.example`、`README.md`、`CHANGELOG.md`
+
+**具体内容**
+
+- 表结构（0006，只扩）：新表 `analyses`（账户、时间、汇总数据 `stats`、报告 `report`、模型），`ai_usage` 加 `analyses` 列（默认 0）。上一版代码不读不写它们，退回上一版照常运行。
+- `analysis.ts`：`learningStats()` 只按每句第一次提交算平均分、前一半 / 后一半句子对比、学习曲线（两周内按天、16 周内按周、再长分成约 16 段，日期按北京时间）、批注问题类型、含各结构（不算 main）的句子平均分、四六级、改了再交的提分、圈谓语和选译文的结果；`cleanReport()` 截断各字段，习惯的例子要能在这个账户的译文里找到（不管空格）才留下，并记下是哪一句。
+- 提示词 `analysisPrompt()`：结构名称取自出题规范“知识点”一段（`specKbNames()`），学生译文和批注片段放在 `<student_material>` 里并提醒不要当成指令；最近 40 条批注问题、几句完整的例子（最近 4 句 + 分最低的 2 句的第一次提交）、上次分析的总评和习惯。
+- `GET /api/analysis` 读最新一份，`POST /api/analysis` 分析一次：同一账户同时只跑一次（409），不到 3 句返回 400（不占次数），先占次数再调用模型（`withQuota` 从 `createAi` 里提出来共用），回复缺内容再试一次，失败退回次数。token 用量记为 `analyze`（“学习分析”）。
+- 你自己的账户：学习分析跟着 ChatGPT 套餐的“改题”开关走；邀请账户照旧只用自己填的模型。
+- 页面：记录页的走势图下面一张卡片，读报告时有占位，分析时显示进度（可以先去别的页面，写好了弹提示），报告可以收起（记在本机）；不够 3 句、没配模型、次数用完时按钮不可点并说明原因。
+- 测试：汇总数据的各项（第一次提交、按天按周的曲线、北京时间换日、没分数和句子不在的批改不算）；整理报告；不到 3 句不调用模型；提示词内容；报告存取、用量和 token 记账；带上上次的要点；缺内容时重试并退回次数；同时点两次；用完次数 429；邀请账户只分析自己的数据、不会用到你的模型。
+
 ## 2026-10-21 02:31:43
 
 **变更类型**：新功能

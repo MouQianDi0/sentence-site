@@ -1,4 +1,4 @@
-// “记录”页：练过的句子、批改得分走势、每句的批改历史
+// “记录”页：练过的句子、批改得分走势、AI 学习分析（analysis.ts）、每句的批改历史
 import type { Attempt, Sentence } from '@sentence-site/shared';
 import { plain } from '@sentence-site/shared/text';
 import * as A from './lib/anim.ts';
@@ -7,6 +7,7 @@ import { esc, fmtTime, scoreTone } from './lib/format.ts';
 import { C, TONE } from './styles.ts';
 import { state, rec, atts, saveUI } from './state.ts';
 import { open } from './practice/nav.ts';
+import { onAnalysisClick, renderAnalysis } from './analysis.ts';
 
 export function renderRecords(): void {
   const el = $('viewRecords');
@@ -60,6 +61,7 @@ export function renderRecords(): void {
     `<span><b class="mr-0.5 font-mono text-[20px] font-medium tabular-nums text-ink">${n}</b>${label}</span>`;
   el.innerHTML = `<div class="flex flex-wrap gap-x-[18px] gap-y-1.5 text-[14px] text-muted">${stat(items.length, '句练过')}${stat(items.filter((x) => x.r?.done).length, '句完成')}${stat(allAtts.length, '次批改')}${avg != null && best != null ? stat(avg, '平均分') + stat(best, '最高分') : ''}</div>
     ${chart}
+    <div id="analysisCard" class="${C.card} flex flex-col gap-3.5 p-3.5"></div>
     <div class="flex flex-col gap-2">${items
       .map(({ id, s, r, list, updated }) => {
         const bs = list.length ? Math.max(...list.map((x) => x.total ?? 0)) : null;
@@ -85,10 +87,12 @@ export function renderRecords(): void {
           <div class="${C.row}"><button class="${C.btnPrimary} px-3 py-1.5 text-[13.5px]" data-open="${esc(id)}">回到这句练习</button></div></div></details>`;
       })
       .join('')}</div>`;
+  renderAnalysis();
 }
 
 export function initRecords(): void {
   $('viewRecords').addEventListener('click', (e) => {
+    if (onAnalysisClick(e)) return;
     const b = closest(e, '[data-open]');
     if (!b?.dataset.open) return;
     state.ui.view = 'practice';

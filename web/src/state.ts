@@ -1,6 +1,7 @@
 // 页面状态：句库、练习记录、当前句子和各步骤的进度。各模块直接读写 state 里的字段，改完再调对应的 render。
 import type {
   AccountRole,
+  Analysis,
   Attempt,
   DictEntry,
   PracticeRecord,
@@ -25,6 +26,8 @@ export interface UiPrefs {
   pin?: boolean;
   voice?: string;
   rate?: number;
+  /** 记录页的 AI 学习分析报告收起来了 */
+  analysisFold?: boolean;
 }
 
 /** 页面上的练习记录：本地先改，再异步存到服务器，所以有的字段可能还没有 */
@@ -118,6 +121,14 @@ export const state = {
   /** 正在查的词（`单词|句子 id`） */
   lookupBusy: null as string | null,
   lookupErr: null as { key: string; msg: string } | null,
+  /** 记录页的 AI 学习分析：最近一份报告（还没分析过是 null） */
+  analysis: null as Analysis | null,
+  /** 读报告：'' 还没读，loading 正在读，ok 读好了，error 没读到 */
+  analysisLoad: '' as '' | 'loading' | 'ok' | 'error',
+  /** 正在分析（在后台进行，可以去别的页面） */
+  analysisBusy: false,
+  /** 最近一次分析没成功的原因 */
+  analysisErr: '',
 };
 
 export const saveUI = (): void => ls.set(LS_UI, state.ui);

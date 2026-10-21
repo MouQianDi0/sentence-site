@@ -42,8 +42,8 @@ const shuffleCopy = <T>(arr: T[]): T[] => {
 };
 
 /** 账户：accounts 表的一行，只能动这个账户自己的句子 */
-type Account = Pick<AccountRow, 'id' | 'role'>;
-type Logger = Pick<Console, 'log' | 'error'> & { warn?: (...a: unknown[]) => void };
+export type Account = Pick<AccountRow, 'id' | 'role'>;
+export type Logger = Pick<Console, 'log' | 'error'> & { warn?: (...a: unknown[]) => void };
 
 export function toHttpError(e: unknown): Error {
   if (e instanceof HttpError) return e;
@@ -59,6 +59,29 @@ export function toHttpError(e: unknown): Error {
     return new HttpError(status, e.message);
   }
   return e instanceof Error ? e : new Error(String(e));
+}
+
+/**
+ * 先占一次今天的额度再调用模型：用完了返回 429（message 里的 {n} 换成上限）；fn 抛错时用同一个 day 退回这一次，失败不算次数。
+ * 先占后调，几个请求同时到也不会冲过上限。
+ */
+export async function withQuota<T>(
+  q: { account: Account; field: UsageField; limit: number; message: string; log?: Logger },
+  fn: (day: string) => Promise<T>,
+): Promise<T> {
+  const { account, field, limit, log = console } = q;
+  const day = shanghaiDate();
+  if (!(await repo.reserveUsage(account.id, day, field, limit))) {
+    throw new HttpError(429, q.message.replace('{n}', String(limit)));
+  }
+  try {
+    return await fn(day);
+  } catch (e) {
+    await repo
+      .releaseUsage(account.id, day, field)
+      .catch((err: Error) => log.error?.(`[ai] 退回${field}次数没成功：${err.message}`));
+    throw e;
+  }
 }
 
 /** 整理批改结果：分数夹到范围内，总分由后端相加，问题片段必须能在译文里找到 */
@@ -211,31 +234,6 @@ export function createAi({
   }
 
   /**
-   * 先占一次今天的额度再调用模型：用完了返回 429；fn 抛错时用同一个 day 退回这一次，失败不算次数。
-   * 先占后调，几个请求同时到也不会冲过上限。
-   */
-  async function withQuota<T>(
-    account: Account,
-    field: UsageField,
-    limit: number,
-    message: string,
-    fn: (day: string) => Promise<T>,
-  ): Promise<T> {
-    const day = shanghaiDate();
-    if (!(await repo.reserveUsage(account.id, day, field, limit))) {
-      throw new HttpError(429, message.replace('{n}', String(limit)));
-    }
-    try {
-      return await fn(day);
-    } catch (e) {
-      await repo
-        .releaseUsage(account.id, day, field)
-        .catch((err: Error) => log.error?.(`[ai] 退回${field}次数没成功：${err.message}`));
-      throw e;
-    }
-  }
-
-  /**
    * 批改一段译文。boost（设置里的“准确度提升”）：
    * - 关（默认）：调用 1 次模型，打分和批注都用这一次的。
    * - 开：后台并行 GRADE_RUNS 次独立评分，分数取平均，再开一次新的对话汇总成一份批注。
@@ -252,7 +250,8 @@ export function createAi({
     if (text.length > 500) throw new HttpError(400, '译文太长了（最多 500 字）');
     const sentence = await repo.getSentence(account.id, String(sentenceId || ''));
     if (!sentence) throw new HttpError(404, '句子不存在');
-    return withQuota(account, 'grades', cfg.limits.grade, '今天的批改次数用完了（{n} 次），明天再来', () =>
+    const message = '今天的批改次数用完了（{n} 次），明天再来';
+    return withQuota({ account, field: 'grades', limit: cfg.limits.grade, message, log }, () =>
       gradeNow(account, sentence, text, boost),
     );
   }
@@ -390,7 +389,8 @@ export function createAi({
     if (!sentence) throw new HttpError(404, '句子不存在');
     const cached = await repo.getDict(account.id, sentence.id, word);
     if (cached) return { word, data: cached as DictEntry, cached: true };
-    return withQuota(account, 'lookups', cfg.limits.lookup, '今天的查词次数用完了（{n} 次）', () =>
+    const message = '今天的查词次数用完了（{n} 次）';
+    return withQuota({ account, field: 'lookups', limit: cfg.limits.lookup, message, log }, () =>
       lookupNow(account, sentence, word),
     );
   }
@@ -492,7 +492,16 @@ export function createAi({
           made =
             source === 'daily'
               ? await draft()
-              : await withQuota(account, 'gens', cfg.limits.generate, '今天加练出题的次数用完了（{n} 次）', draft);
+              : await withQuota(
+                  {
+                    account,
+                    field: 'gens',
+                    limit: cfg.limits.generate,
+                    message: '今天加练出题的次数用完了（{n} 次）',
+                    log,
+                  },
+                  draft,
+                );
         } catch (e) {
           if (!drawn.length) throw e;
           log.warn?.(`[ai] 题库抽到 ${drawn.length} 句，AI 出题没成功：${(e as Error).message}`);

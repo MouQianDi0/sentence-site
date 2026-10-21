@@ -29,6 +29,7 @@ export const KIND_NAMES: Record<TokenKind, string> = {
   review: '复核谓语',
   test: '测试连接',
   annotate: '标注题库',
+  analyze: '学习分析',
 };
 
 const RANGES = [7, 30, 90];

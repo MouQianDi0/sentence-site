@@ -1,6 +1,7 @@
 // 所有 SQL 都在这里。日期和时间统一在 SQL 里转成字符串，接口返回的格式稳定。
 import type {
   AccountRole,
+  Analysis,
   Attempt,
   Feedback,
   Level,
@@ -76,6 +77,7 @@ export interface UsageRow {
   grades: number;
   lookups: number;
   gens: number;
+  analyses: number;
 }
 export type UsageField = keyof UsageRow;
 
@@ -388,14 +390,14 @@ export async function deleteSetting(key: string): Promise<void> {
 }
 
 // ---- daily usage（按账户分别计数）----------------------------------------------
-const USAGE_FIELDS: UsageField[] = ['grades', 'lookups', 'gens'];
+const USAGE_FIELDS: UsageField[] = ['grades', 'lookups', 'gens', 'analyses'];
 
 export async function getUsage(accountId: string, day: string): Promise<UsageRow> {
   const { rows } = await query<UsageRow>(
-    'SELECT grades, lookups, gens FROM ai_usage WHERE account_id = $1 AND day = $2::date',
+    'SELECT grades, lookups, gens, analyses FROM ai_usage WHERE account_id = $1 AND day = $2::date',
     [accountId, day],
   );
-  return rows[0] || { grades: 0, lookups: 0, gens: 0 };
+  return rows[0] || { grades: 0, lookups: 0, gens: 0, analyses: 0 };
 }
 
 /**
@@ -421,6 +423,35 @@ export async function releaseUsage(accountId: string, day: string, field: UsageF
     accountId,
     day,
   ]);
+}
+
+// ---- AI 学习分析 ------------------------------------------------------------------
+const ANALYSIS_COLS = `id::int AS id, to_json(created_at)#>>'{}' AS "createdAt", model, stats, report`;
+
+/** 存一次分析，返回存好的这一份 */
+export async function insertAnalysis(a: {
+  accountId: string;
+  stats: Analysis['stats'];
+  report: Analysis['report'];
+  model: string | null;
+}): Promise<Analysis> {
+  const { rows } = await query<Analysis>(
+    `INSERT INTO analyses (account_id, stats, report, model) VALUES ($1, $2::jsonb, $3::jsonb, $4)
+     RETURNING ${ANALYSIS_COLS}`,
+    [a.accountId, json(a.stats), json(a.report), a.model],
+  );
+  const row = rows[0];
+  if (!row) throw new Error('数据库没有返回写入的行');
+  return row;
+}
+
+/** 这个账户最近的一次分析；还没分析过是 null */
+export async function latestAnalysis(accountId: string): Promise<Analysis | null> {
+  const { rows } = await query<Analysis>(
+    `SELECT ${ANALYSIS_COLS} FROM analyses WHERE account_id = $1 ORDER BY created_at DESC, id DESC LIMIT 1`,
+    [accountId],
+  );
+  return rows[0] ?? null;
 }
 
 // ---- token 用量（按账户、日期、用途、模型累加）-------------------------------------

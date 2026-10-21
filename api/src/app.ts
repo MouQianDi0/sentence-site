@@ -25,6 +25,7 @@ import { createAccounts, memberVersion, newDeviceId, isDeviceId, isExpired, EXPI
 import { shanghaiDate } from './time.ts';
 import { createAnnotator, ANNOTATE_USE, type Annotator } from './annotate.ts';
 import { BANK_STATUSES, originText } from './bank.ts';
+import { createAnalysis, type AnalysisService } from './analysis.ts';
 
 /** 处理函数拿到的东西。不需要登录的接口里 account 是 null，不要读它 */
 interface Ctx {
@@ -54,6 +55,8 @@ export interface AppDeps {
   chatgpt?: ChatgptService | null;
   /** 标注题库（只用国内模型）；不传时自己建一个 */
   annotator?: Annotator | null;
+  /** AI 学习分析；不传时自己建一个 */
+  analysis?: AnalysisService | null;
   log?: Logger;
 }
 
@@ -81,6 +84,7 @@ export function createApp(
     ai: aiIn = null,
     chatgpt: chatgptIn = null,
     annotator: annotatorIn = null,
+    analysis: analysisIn = null,
     log = console,
   }: AppDeps = {},
 ) {
@@ -100,6 +104,7 @@ export function createApp(
   const practiceSvc = practice || createPractice(cfg);
   // 标注题库：只用你自己配的国内模型，永远不走 ChatGPT（llmFor 对 annotate 用途不套 ChatGPT）
   const annotator = annotatorIn || createAnnotator({ cfg, llmFor: hub.llmFor, log });
+  const analysis = analysisIn || createAnalysis({ cfg, llmFor: hub.llmFor, log });
   const settingsReady = Promise.all([
     settings ? null : settingsSvc.load().catch((e: Error) => log.error('[settings]', e.message)),
     chatgptIn ? null : chatgpt.load().catch((e: Error) => log.error('[chatgpt]', e.message)),
@@ -268,11 +273,21 @@ export function createApp(
       body: {
         day,
         ...(await repo.getUsage(account.id, day)),
-        limits: { grade: cfg.limits.grade, lookup: cfg.limits.lookup, generate: cfg.limits.generate },
+        limits: {
+          grade: cfg.limits.grade,
+          lookup: cfg.limits.lookup,
+          generate: cfg.limits.generate,
+          analyze: cfg.limits.analyze,
+        },
         aiReady: (await hub.llmFor(account, { kind: 'grade' })).ready(),
       },
     };
   });
+
+  // ---- AI 学习分析（记录页）--------------------------------------------------------
+  // 最近的一份报告（还没分析过是 null）；POST 现在分析一次，占一次今天的分析次数
+  router.add('GET', '/api/analysis', async ({ account }) => ({ body: { analysis: await analysis.latest(account) } }));
+  router.add('POST', '/api/analysis', async ({ account }) => ({ body: { analysis: await analysis.run(account) } }));
 
   // 当前账户自己的 token 用量（设置 → Token 用量）。?days=7|30|90：图表和分类统计的范围
   router.add('GET', '/api/usage/tokens', async ({ url, account }) => ({

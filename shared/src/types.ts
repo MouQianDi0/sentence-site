@@ -171,13 +171,103 @@ export interface Usage {
   grades: number;
   lookups: number;
   gens: number;
-  limits: { grade: number; lookup: number; generate: number };
+  /** 今天做了几次 AI 学习分析 */
+  analyses: number;
+  limits: { grade: number; lookup: number; generate: number; analyze: number };
   aiReady: boolean;
 }
 
+// ---- AI 学习分析（记录页）---------------------------------------------------------
+/** 几次批改的平均分：总分、准确、通顺、完整 */
+export interface ScoreAvg {
+  total: number;
+  acc: number;
+  flu: number;
+  comp: number;
+}
+
+/** 学习曲线上的一个点：from 到 to（北京时间的日期，含）这段时间里第一次提交的平均分 */
+export interface CurvePoint extends ScoreAvg {
+  from: string;
+  to: string;
+  /** 这段时间批改了几句 */
+  n: number;
+}
+
+/**
+ * 分析时后端汇总的数据。分数都按每句第一次提交的算（改了再交的分数看过批注，不算真实水平），
+ * 同一句改了再交的另算在 retry 里。
+ */
+export interface LearningStats {
+  /** 批改过的句子数 */
+  sentences: number;
+  /** 批改总次数（含同一句改了再交） */
+  attempts: number;
+  /** 第一次和最近一次批改的时间 */
+  firstAt: string;
+  lastAt: string;
+  avg: ScoreAvg;
+  /** 按时间先后，前一半句子、后一半句子的平均分 */
+  earlier: ScoreAvg;
+  recent: ScoreAvg;
+  /** 曲线上一个点是一天、一周，还是更长（练的时间跨度长时） */
+  curveUnit: 'day' | 'week' | 'span';
+  curve: CurvePoint[];
+  /** 批注里各类问题出现的次数（误译、翻译腔……），earlier / recent 是前一半、后一半句子里的次数，多的在前 */
+  issues: { type: string; n: number; earlier: number; recent: number }[];
+  /** 含某种结构（知识点键，不含 main）的句子：几句、平均分，分低的在前 */
+  points: { k: string; n: number; avg: number }[];
+  /** 四级、六级各自的句数和平均分 */
+  levels: { level: string; n: number; avg: number }[];
+  /** 同一句改了再交过的：几句，最好一次比第一次平均高几分 */
+  retry: { sentences: number; gain: number };
+  /** 第 1 步圈谓语：做过几句，一共找对几个、该找几个、多圈几个 */
+  verbs: { sentences: number; ok: number; total: number; wrong: number };
+  /** 第 3 步选译文：做过几句，几句第一次就选对 */
+  choice: { sentences: number; ok: number };
+}
+
+/** 报告里举的例子：src 一字不差摘自学生的某次译文（找不到的例子后端会丢掉），sentenceId 是那句 */
+export interface HabitExample {
+  src: string;
+  fix: string;
+  sentenceId: string;
+}
+
+/** 一个要改的翻译习惯：叫什么、表现在哪、例子、怎么改 */
+export interface Habit {
+  name: string;
+  detail: string;
+  examples: HabitExample[];
+  advice: string;
+}
+
+/** 模型写的学习分析报告 */
+export interface LearningReport {
+  /** 总评 */
+  summary: string;
+  /** 学习曲线怎么看：分数怎么变、哪一项在进步或退步 */
+  curve: string;
+  strengths: string[];
+  habits: Habit[];
+  /** 薄弱的结构或知识点 */
+  weak: { name: string; detail: string }[];
+  /** 接下来怎么练 */
+  plan: string[];
+}
+
+/** 一次 AI 学习分析（GET/POST /api/analysis） */
+export interface Analysis {
+  id: number;
+  createdAt: string;
+  model: string | null;
+  stats: LearningStats;
+  report: LearningReport;
+}
+
 // ---- token 用量 -----------------------------------------------------------------
-/** 用到模型的地方：批改、查词、出题、复核谓语、测试连接、标注题库（只有 owner，永远不走 ChatGPT） */
-export type TokenKind = 'grade' | 'lookup' | 'generate' | 'review' | 'test' | 'annotate';
+/** 用到模型的地方：批改、查词、出题、复核谓语、测试连接、标注题库（只有 owner，永远不走 ChatGPT）、学习分析 */
+export type TokenKind = 'grade' | 'lookup' | 'generate' | 'review' | 'test' | 'annotate' | 'analyze';
 
 /** 一段时间里的用量：输入、输出 token 数和调用次数 */
 export interface TokenCount {
@@ -381,7 +471,7 @@ export interface LlmTestResult {
 }
 
 // ---- ChatGPT 套餐（Sign in with ChatGPT，只有你自己的账户能用）--------------------------
-/** 哪些用途走 ChatGPT 套餐：改题；出题（含出题后的谓语复核）；查词 */
+/** 哪些用途走 ChatGPT 套餐：改题（含学习分析）；出题（含出题后的谓语复核）；查词 */
 export interface ChatgptUse {
   grade: boolean;
   generate: boolean;

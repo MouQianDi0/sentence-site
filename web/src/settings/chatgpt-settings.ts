@@ -45,7 +45,7 @@ const EXT =
   '<svg class="h-3.5 w-3.5" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.5 3.5h-3v9h9v-3M9 2.5h4.5V7M13.5 2.5L7.5 8.5"/></svg>';
 
 const USES: { key: keyof ChatgptUse; label: string; hint: string }[] = [
-  { key: 'grade', label: '改题', hint: '批改译文（开着“准确度提升”时一次改题会调用 6 次）' },
+  { key: 'grade', label: '改题', hint: '批改译文（开着“准确度提升”时一次改题会调用 6 次），以及记录页的 AI 学习分析' },
   { key: 'generate', label: '出题', hint: '加练、生成今日任务，以及出题后的谓语复核' },
   { key: 'lookup', label: '查词', hint: '查词频繁又简单，默认留给国内模型，省下 ChatGPT 的额度' },
 ];

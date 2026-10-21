@@ -1,5 +1,6 @@
 // 和后端说话。401 时通知页面回到输密码的界面。返回值的类型来自 @sentence-site/shared，和后端一致。
 import type {
+  Analysis,
   Attempt,
   BankAdmin,
   BankItem,
@@ -137,6 +138,9 @@ export const api = {
     request<{ attempt: Attempt }>('POST', '/api/grade', { sentenceId, text }),
   lookup: (sentenceId: string, word: string) => request<LookupResult>('POST', '/api/lookup', { sentenceId, word }),
   usage: () => request<Usage>('GET', '/api/usage'),
+  /** 记录页的 AI 学习分析：最近一份报告；analyze 现在分析一次（要半分钟到一分钟） */
+  analysis: () => request<{ analysis: Analysis | null }>('GET', '/api/analysis'),
+  analyze: () => request<{ analysis: Analysis }>('POST', '/api/analysis'),
   /** 自己的 token 用量；days：图表和分类统计看最近几天（7、30、90） */
   tokenStats: (days: number) => request<TokenStats>('GET', `/api/usage/tokens?days=${days}`),
 
