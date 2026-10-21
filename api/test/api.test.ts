@@ -866,5 +866,5 @@ test('每日额度：模型调用失败时退回占的那一次', async () => {
   generateReplyGetter = () => ({ sentences: [] });
   await assert.rejects(() => ai.generate(owner, { source: 'extra', n: 1, levels: ['CET-4'] }), /没通过校验/);
   generateReplyGetter = () => null;
-  assert.deepEqual(await repo.getUsage('owner', shanghaiDate()), { grades: 0, lookups: 0, gens: 0 });
+  assert.deepEqual(await repo.getUsage('owner', shanghaiDate()), { grades: 0, lookups: 0, gens: 0, analyses: 0 });
 });
