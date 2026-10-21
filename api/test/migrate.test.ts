@@ -99,7 +99,12 @@ test('0003：再回填退回上一版期间写的空 account_id，删掉没有�
       INSERT INTO records (account_id, sentence_id, done) VALUES ('mig-m', 'mig-s-member', true);
       INSERT INTO attempts (sentence_id, text) VALUES ('mig-s-owner', '译文'), ('mig-s-member', '译文'), (NULL, '孤儿');
       INSERT INTO dict_cache (sentence_id, word, data) VALUES ('mig-s-owner', 'work', '{}'), ('mig-s-member', 'work', '{}')`);
-    assert.deepEqual(await migrate(() => {}), ['0003_child_account_fk.sql', '0004_checks.sql', '0005_bank.sql']);
+    assert.deepEqual(await migrate(() => {}), [
+      '0003_child_account_fk.sql',
+      '0004_checks.sql',
+      '0005_bank.sql',
+      '0006_analyses.sql',
+    ]);
 
     for (const table of ['records', 'attempts', 'dict_cache']) {
       assert.deepEqual(owners(old, table), ['mig-s-member=mig-m', 'mig-s-owner=owner'], table);
@@ -184,7 +189,7 @@ test('0004：加上 CHECK 约束，违反的写入被拒，文件可以重复执
         ('mig-m', 'mig-s-member', '满分', 40, 30, 30, 100),
         ('mig-m', 'mig-s-member', '零分', 0, 0, 0, 0),
         ('mig-m', 'mig-s-member', '旧数据没有分数', NULL, NULL, NULL, NULL)`);
-    assert.deepEqual(await migrate(() => {}), ['0004_checks.sql', '0005_bank.sql']);
+    assert.deepEqual(await migrate(() => {}), ['0004_checks.sql', '0005_bank.sql', '0006_analyses.sql']);
 
     const checks = old.raw(`SELECT conname FROM pg_constraint WHERE contype = 'c'
       AND conrelid IN ('accounts'::regclass, 'sentences'::regclass, 'attempts'::regclass) ORDER BY 1`);
@@ -237,7 +242,7 @@ test('0005：加上题库的表和 sentences.bank_item_id，上一版代码照�
   await withOldDb('sentence_mig_v4', 4, async (old) => {
     old.raw(`INSERT INTO sentences (id, account_id, batch, source, segs, opts) VALUES
       ('mig-s-old', 'owner', '2026-10-01', 'daily', '[]', '[]')`);
-    assert.deepEqual(await migrate(() => {}), ['0005_bank.sql']);
+    assert.deepEqual(await migrate(() => {}), ['0005_bank.sql', '0006_analyses.sql']);
     assert.equal(old.raw(`SELECT bank_item_id IS NULL FROM sentences WHERE id = 'mig-s-old'`).trim(), 't');
     // 上一版代码不写 bank_item_id：多句都是 NULL，不撞 UNIQUE (account_id, bank_item_id)
     old.raw(`INSERT INTO sentences (id, account_id, batch, source, segs, opts) VALUES
@@ -278,5 +283,26 @@ test('0005：加上题库的表和 sentences.bank_item_id，上一版代码照�
       old.raw(`SELECT count(*) FROM pg_constraint WHERE conname = 'sentences_account_bank_key'`).trim(),
       '1',
     );
+  });
+});
+
+test('0006：加上学习分析的表和 ai_usage.analyses，上一版代码照常记用量，文件可以重复执行', async () => {
+  await withOldDb('sentence_mig_v5', 5, async (old) => {
+    old.raw(`INSERT INTO ai_usage (account_id, day, grades) VALUES ('owner', '2026-10-01', 2)`);
+    assert.deepEqual(await migrate(() => {}), ['0006_analyses.sql']);
+    assert.equal(old.raw(`SELECT analyses FROM ai_usage WHERE day = '2026-10-01'`).trim(), '0');
+    // 上一版代码只写 grades / lookups / gens，analyses 用默认值 0
+    old.raw(`INSERT INTO ai_usage (account_id, day, lookups) VALUES ('owner', '2026-10-02', 1)`);
+    assert.equal(old.raw(`SELECT analyses FROM ai_usage WHERE day = '2026-10-02'`).trim(), '0');
+
+    // 分析跟着账户走：删掉邀请账户连带删掉它的分析
+    old.raw(`INSERT INTO accounts (id, role, note, code_hash) VALUES ('mig-m6', 'member', '', 'mig-hash-6');
+      INSERT INTO analyses (account_id, stats, report) VALUES ('mig-m6', '{}', '{}'), ('owner', '{}', '{}')`);
+    old.raw(`DELETE FROM accounts WHERE id = 'mig-m6'`);
+    assert.equal(old.raw(`SELECT string_agg(account_id, ',') FROM analyses`).trim(), 'owner');
+
+    old.raw('DELETE FROM schema_migrations WHERE version = 6');
+    assert.deepEqual(await migrate(() => {}), ['0006_analyses.sql']);
+    assert.equal(old.raw('SELECT count(*) FROM analyses').trim(), '1');
   });
 });
